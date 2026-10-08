@@ -1,0 +1,78 @@
+# SolarBI Pascual - local infrastructure.
+# Every port, user, password and database name comes from .env; the ":?" form
+# makes Compose fail fast when a variable is missing instead of using a default.
+
+name: solarbi
+
+services:
+  db:
+    # PostgreSQL 16 + TimescaleDB (community edition: hypertables, continuous
+    # aggregates, compression). Pinned tag; see docs/adr/0001.
+    image: timescale/timescaledb:2.30.2-pg16
+    restart: unless-stopped
+    # Mounting sql/init replaces the image's own init scripts (extension install
+    # and timescaledb-tune). 00_schemas.sql creates the extension; server settings
+    # are declared here explicitly so every machine runs the same configuration.
+    command: ["postgres", "-c", "timescaledb.telemetry_level=off"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      # Read by sql/init/01_roles.sh to create the read-only login roles.
+      GRAFANA_READER_PASSWORD: ${GRAFANA_READER_PASSWORD:?set GRAFANA_READER_PASSWORD in .env}
+      POWERBI_READER_PASSWORD: ${POWERBI_READER_PASSWORD:?set POWERBI_READER_PASSWORD in .env}
+    ports:
+      # Bound to loopback only: Power BI Desktop and the ETL run on this machine.
+      - "127.0.0.1:${POSTGRES_PORT:?set POSTGRES_PORT in .env}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Scripts here run once, in name order, when the data volume is empty.
+      - ./sql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # TCP check: the temporary server used during init listens only on the
+      # Unix socket, so this stays unhealthy until init scripts have finished.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - solarbi
+
+  grafana:
+    # Grafana Open Source edition (grafana/grafana). Pinned tag; see docs/adr/0003.
+    image: grafana/grafana:13.2.3
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:?set GRAFANA_ADMIN_USER in .env}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      # Interpolated by Grafana inside grafana/provisioning/datasources/postgres.yaml.
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      GRAFANA_READER_PASSWORD: ${GRAFANA_READER_PASSWORD:?set GRAFANA_READER_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:?set GRAFANA_PORT in .env}:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      # Dashboard JSON versioned in the repo (source of truth).
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - solarbi
+
+volumes:
+  pgdata:
+  grafana-data:
+
+networks:
+  solarbi:
