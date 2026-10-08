@@ -1,0 +1,195 @@
+# yaml-language-server: $schema=./telemetria.schema.json
+#
+# Data contract for the inverter telemetry of SolarBI Pascual.
+# Single source of truth for the dataset: the ETL reads column names, units,
+# ranges, quality rules and fault thresholds from here, never from code.
+# Validated by etl/contract.py against contracts/telemetria.schema.json.
+
+contract_version: 1.0.0
+dataset: telemetria
+description: >-
+  Telemetría de inversores fotovoltaicos de la planta SolarBI Pascual: una lectura
+  cada 5 minutos por dispositivo con potencia AC, irradiancia y temperatura de módulo.
+
+owner:
+  name: Brayan Romero Dorado
+  role: Data owner y product owner
+  responsibilities: >-
+    Aprueba el contrato y sus cambios de versión, define los niveles de calidad
+    aceptables (SLA) y decide qué datos se publican a los consumidores.
+steward:
+  role: Data steward (BI analyst / data modeler)
+  responsibilities: >-
+    Mantiene las definiciones, unidades y reglas de calidad de este archivo, revisa
+    dq.etl_run_log y dq.rule_result después de cada carga y gestiona las incidencias.
+custodian:
+  role: Data custodian (data engineer)
+  responsibilities: >-
+    Opera la infraestructura (PostgreSQL + TimescaleDB, Grafana), los respaldos, los
+    roles y permisos, y la ejecución del ETL; no cambia definiciones de negocio.
+
+change_policy:
+  versioning: semver
+  breaking_changes_require_major: true
+  breaking_changes:
+    - Eliminar o renombrar una columna de la fuente.
+    - Cambiar el tipo, la unidad o la zona horaria de una columna.
+    - Cambiar la frecuencia de muestreo.
+  non_breaking_changes:
+    - Agregar una columna nula al final del archivo (versión menor).
+    - Ajustar umbrales o agregar reglas de calidad con acción flag (versión menor).
+    - Corregir descripciones (versión de parche).
+  notice: >-
+    La fuente debe anunciar cualquier cambio antes de enviarlo; el owner aprueba la
+    nueva versión del contrato antes de que el ETL procese archivos con el cambio.
+  enforcement: >-
+    El ETL solo acepta contratos de la versión mayor que soporta y se detiene si el
+    encabezado del archivo no coincide exactamente con columns[].source_name.
+
+source:
+  format: csv
+  path_pattern: telemetria*.csv # relative to BRONZE_DIR
+  delimiter: ","
+  encoding: utf-8
+  header: true
+  null_values: [""]
+  timestamp_format: "%Y-%m-%d %H:%M:%S"
+  source_timezone: America/Bogota
+  frequency_seconds: 300
+  allow_extra_columns: false
+
+columns:
+  - name: ts
+    source_name: ts
+    type: timestamp
+    unit: null
+    nullable: false
+    description: >-
+      Inicio del intervalo de 5 minutos, en hora local de la fuente (sin zona en el
+      archivo). Se almacena como timestamptz en UTC.
+  - name: dispositivo_id
+    source_name: dispositivo_id
+    type: string
+    unit: null
+    nullable: false
+    description: >-
+      Identificador natural del inversor. Se trata como texto porque es una etiqueta,
+      no una cantidad (el dataset real puede usar seriales como INV-001).
+  - name: p_ac_kw
+    source_name: p_ac_kw
+    type: float
+    unit: kW
+    nullable: false
+    range:
+      min: 0
+      max_nominal_factor: 1.1 # max = 1.1 x nominal_kwp of the device
+    description: Potencia activa AC entregada por el inversor, promedio del intervalo.
+  - name: irradiancia_wm2
+    source_name: irradiancia_wm2
+    type: float
+    unit: W/m2
+    nullable: true
+    range:
+      min: 0
+      max: 1500
+    description: Irradiancia en el plano del arreglo.
+  - name: temp_modulo_c
+    source_name: temp_modulo_c
+    type: float
+    unit: degC
+    nullable: true
+    range:
+      min: -10
+      max: 90
+    description: Temperatura de la parte posterior del módulo fotovoltaico.
+
+keys:
+  natural_key: [dispositivo_id, ts]
+  dedup:
+    keep: first
+
+quality_rules:
+  - id: range_p_ac_kw
+    description: >-
+      Potencia fuera del rango físico (negativa o mayor que 1,1 veces la nominal).
+      Es un error del sensor, no una falla de la planta.
+    columns: [p_ac_kw]
+    check: range
+    action: reject
+  - id: missing_p_ac_kw
+    description: Lectura sin potencia; no aporta a la energía del día.
+    columns: [p_ac_kw]
+    check: not_null
+    action: reject
+  - id: missing_irradiancia
+    description: >-
+      Lectura sin irradiancia. Se conserva porque la potencia sigue siendo válida para
+      la energía; se excluye después de los cálculos de yield y Performance Ratio.
+    columns: [irradiancia_wm2]
+    check: not_null
+    action: flag
+  - id: duplicate_key
+    description: Más de una lectura para el mismo dispositivo y la misma marca de tiempo.
+    columns: [dispositivo_id, ts]
+    check: unique
+    action: dedupe
+  - id: range_irradiancia
+    description: Irradiancia fuera del rango físico.
+    columns: [irradiancia_wm2]
+    check: range
+    action: flag
+  - id: range_temp_modulo
+    description: Temperatura de módulo fuera del rango físico.
+    columns: [temp_modulo_c]
+    check: range
+    action: flag
+
+fault_rules:
+  - id: zero_power_daylight
+    description: >-
+      Potencia nula en horario de sol (09:00 a 15:00 hora local): posible falla del
+      inversor. La tolerancia de 0,01 kW absorbe el ruido del sensor.
+    check: threshold_in_window
+    column: p_ac_kw
+    operator: "<="
+    threshold: 0.01
+    window:
+      start: "09:00"
+      end: "15:00" # half-open: [start, end)
+    min_consecutive_readings: 1
+    severity: critical
+    irradiance_gate:
+      enabled: false # enable to avoid false positives on very cloudy days
+      column: irradiancia_wm2
+      operator: ">"
+      threshold: 200
+  - id: missing_daytime_reading
+    description: >-
+      Falta una lectura esperada en horario de sol: el inversor o la comunicación
+      dejaron de reportar.
+    check: missing_in_window
+    window:
+      start: "09:00"
+      end: "15:00"
+    min_consecutive_readings: 1
+    severity: warning
+
+sites:
+  - sitio_id: PB-01
+    nombre: Planta solar SolarBI Pascual (simulada)
+    ciudad: Medellín
+    zona_horaria: America/Bogota
+
+devices:
+  - dispositivo_id: "1"
+    nombre: Inversor 1
+    tipo: inversor
+    sitio_id: PB-01
+    nominal_kwp: 5.0
+
+sla:
+  pct_datos_validos_min: 95
+  freshness:
+    schedule_cron: "0 0 * * *" # daily at midnight, local time
+    timezone: America/Bogota
+    max_delay_minutes: 60

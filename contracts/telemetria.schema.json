@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/romerobrayan/solarbi-romero-dorado/contracts/telemetria.schema.json",
+  "title": "SolarBI data contract",
+  "description": "Structure of a SolarBI data contract. Semantic checks (column references, ranges, time zones) live in etl/contract.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version", "dataset", "description", "owner", "steward", "custodian",
+    "change_policy", "source", "columns", "keys", "quality_rules", "fault_rules",
+    "sites", "devices", "sla"
+  ],
+  "properties": {
+    "contract_version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "dataset": { "$ref": "#/$defs/identifier" },
+    "description": { "type": "string", "minLength": 1 },
+    "owner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "role", "responsibilities"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "role": { "type": "string", "minLength": 1 },
+        "responsibilities": { "type": "string", "minLength": 1 }
+      }
+    },
+    "steward": { "$ref": "#/$defs/role" },
+    "custodian": { "$ref": "#/$defs/role" },
+    "change_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["versioning", "breaking_changes_require_major", "breaking_changes", "notice", "enforcement"],
+      "properties": {
+        "versioning": { "const": "semver" },
+        "breaking_changes_require_major": { "type": "boolean" },
+        "breaking_changes": { "$ref": "#/$defs/textList" },
+        "non_breaking_changes": { "$ref": "#/$defs/textList" },
+        "notice": { "type": "string", "minLength": 1 },
+        "enforcement": { "type": "string", "minLength": 1 }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format", "path_pattern", "delimiter", "encoding", "header",
+        "timestamp_format", "source_timezone", "frequency_seconds"
+      ],
+      "properties": {
+        "format": { "enum": ["csv"] },
+        "path_pattern": { "type": "string", "minLength": 1 },
+        "delimiter": { "type": "string", "minLength": 1, "maxLength": 1 },
+        "encoding": { "type": "string", "minLength": 1 },
+        "header": { "type": "boolean" },
+        "null_values": { "type": "array", "items": { "type": "string" } },
+        "timestamp_format": { "type": "string", "minLength": 1 },
+        "source_timezone": { "type": "string", "minLength": 1 },
+        "frequency_seconds": { "type": "integer", "minimum": 1 },
+        "allow_extra_columns": { "type": "boolean" }
+      }
+    },
+    "columns": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "source_name", "type", "nullable", "description"],
+        "properties": {
+          "name": { "$ref": "#/$defs/identifier" },
+          "source_name": { "type": ["string", "null"], "minLength": 1 },
+          "type": { "enum": ["timestamp", "string", "integer", "float"] },
+          "unit": { "type": ["string", "null"] },
+          "nullable": { "type": "boolean" },
+          "range": {
+            "type": "object",
+            "additionalProperties": false,
+            "minProperties": 1,
+            "properties": {
+              "min": { "type": "number" },
+              "max": { "type": "number" },
+              "max_nominal_factor": { "type": "number", "exclusiveMinimum": 0 }
+            }
+          },
+          "description": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "keys": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["natural_key", "dedup"],
+      "properties": {
+        "natural_key": { "$ref": "#/$defs/columnList" },
+        "dedup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["keep"],
+          "properties": { "keep": { "enum": ["first", "last"] } }
+        }
+      }
+    },
+    "quality_rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "description", "columns", "check", "action"],
+        "properties": {
+          "id": { "$ref": "#/$defs/identifier" },
+          "description": { "type": "string", "minLength": 1 },
+          "columns": { "$ref": "#/$defs/columnList" },
+          "check": { "enum": ["range", "not_null", "unique"] },
+          "action": { "enum": ["reject", "flag", "dedupe"] }
+        }
+      }
+    },
+    "fault_rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "description", "check", "window", "min_consecutive_readings", "severity"],
+        "properties": {
+          "id": { "$ref": "#/$defs/identifier" },
+          "description": { "type": "string", "minLength": 1 },
+          "check": { "enum": ["threshold_in_window", "missing_in_window"] },
+          "column": { "$ref": "#/$defs/identifier" },
+          "operator": { "$ref": "#/$defs/operator" },
+          "threshold": { "type": "number" },
+          "window": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["start", "end"],
+            "properties": {
+              "start": { "$ref": "#/$defs/clockTime" },
+              "end": { "$ref": "#/$defs/clockTime" }
+            }
+          },
+          "min_consecutive_readings": { "type": "integer", "minimum": 1 },
+          "severity": { "enum": ["info", "warning", "critical"] },
+          "irradiance_gate": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["enabled", "column", "operator", "threshold"],
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "column": { "$ref": "#/$defs/identifier" },
+              "operator": { "$ref": "#/$defs/operator" },
+              "threshold": { "type": "number" }
+            }
+          }
+        },
+        "if": { "properties": { "check": { "const": "threshold_in_window" } } },
+        "then": { "required": ["column", "operator", "threshold"] }
+      }
+    },
+    "sites": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sitio_id", "nombre", "zona_horaria"],
+        "properties": {
+          "sitio_id": { "type": "string", "minLength": 1 },
+          "nombre": { "type": "string", "minLength": 1 },
+          "ciudad": { "type": "string" },
+          "zona_horaria": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "devices": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dispositivo_id", "nombre", "sitio_id", "nominal_kwp"],
+        "properties": {
+          "dispositivo_id": { "type": "string", "minLength": 1 },
+          "nombre": { "type": "string", "minLength": 1 },
+          "tipo": { "type": "string" },
+          "sitio_id": { "type": "string", "minLength": 1 },
+          "nominal_kwp": { "type": "number", "exclusiveMinimum": 0 }
+        }
+      }
+    },
+    "sla": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pct_datos_validos_min", "freshness"],
+      "properties": {
+        "pct_datos_validos_min": { "type": "number", "minimum": 0, "maximum": 100 },
+        "freshness": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schedule_cron", "timezone", "max_delay_minutes"],
+          "properties": {
+            "schedule_cron": { "type": "string", "pattern": "^\\S+( \\S+){4}$" },
+            "timezone": { "type": "string", "minLength": 1 },
+            "max_delay_minutes": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "columnList": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/identifier" }
+    },
+    "textList": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "operator": { "enum": ["<", "<=", ">", ">=", "=="] },
+    "clockTime": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" },
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "responsibilities"],
+      "properties": {
+        "role": { "type": "string", "minLength": 1 },
+        "responsibilities": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
