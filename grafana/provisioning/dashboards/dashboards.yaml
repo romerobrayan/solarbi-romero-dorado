@@ -1,0 +1,17 @@
+# Dashboards as code: every JSON file in grafana/dashboards/ (mounted at
+# /etc/grafana/dashboards) is loaded into the "SolarBI" folder.
+# The repo is the source of truth: UI edits are not saved back. To change a
+# dashboard, edit it in the UI, export the JSON, overwrite the file and commit.
+apiVersion: 1
+
+providers:
+  - name: solarbi-dashboards
+    orgId: 1
+    folder: SolarBI
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

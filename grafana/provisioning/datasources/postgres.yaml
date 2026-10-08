@@ -1,0 +1,25 @@
+# Provisioned PostgreSQL/TimescaleDB datasource, loaded by Grafana at startup.
+# It connects with the read-only role grafana_reader, never the owner.
+# ${...} values are expanded by Grafana from the container environment
+# (set in docker-compose.yml from .env); no secret lives in this file.
+apiVersion: 1
+
+datasources:
+  - name: SolarBI PostgreSQL
+    uid: solarbi-postgres
+    type: grafana-postgresql-datasource
+    access: proxy
+    url: db:5432
+    user: grafana_reader
+    isDefault: true
+    editable: false
+    jsonData:
+      database: ${POSTGRES_DB}
+      sslmode: disable # traffic stays on the internal Docker network
+      postgresVersion: 1600
+      timescaledb: true
+      maxOpenConns: 10
+      maxIdleConns: 5
+      connMaxLifetime: 14400
+    secureJsonData:
+      password: ${GRAFANA_READER_PASSWORD}
