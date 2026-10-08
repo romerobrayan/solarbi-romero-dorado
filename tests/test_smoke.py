@@ -18,7 +18,7 @@ def report() -> EnvironmentReport:
     try:
         return inspect_environment(settings)
     except psycopg.OperationalError as exc:
-        pytest.skip(f"database not reachable at {settings.db.safe_url}: {exc}")
+        pytest.skip(f"database not reachable at {settings.admin_db.safe_url}: {exc}")
 
 
 def test_postgres_16(report: EnvironmentReport) -> None:
@@ -33,5 +33,9 @@ def test_medallion_schemas_exist(report: EnvironmentReport) -> None:
     assert report.missing_schemas == ()
 
 
-def test_read_only_roles_exist(report: EnvironmentReport) -> None:
+def test_roles_exist(report: EnvironmentReport) -> None:
     assert report.missing_roles == ()
+
+
+def test_no_pending_migrations(report: EnvironmentReport) -> None:
+    assert report.migrations_pending == ()
