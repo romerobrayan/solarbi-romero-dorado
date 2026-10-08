@@ -24,6 +24,7 @@ COMMENT ON ROLE bi_readonly IS 'Read-only access to silver, dwh and dq for BI co
 GRANT USAGE ON SCHEMA silver, dwh, dq TO bi_readonly;
 GRANT SELECT ON ALL TABLES IN SCHEMA silver, dwh, dq TO bi_readonly;
 
--- Tables, views and continuous aggregates created later by the owner (the ETL)
--- become readable automatically.
+-- Objects created later by the owner become readable automatically. This only
+-- covers the owner: tables are created by etl_writer, whose equivalent rule lives
+-- in sql/migrations/0001_etl_writer_role.sql.
 ALTER DEFAULT PRIVILEGES IN SCHEMA silver, dwh, dq GRANT SELECT ON TABLES TO bi_readonly;

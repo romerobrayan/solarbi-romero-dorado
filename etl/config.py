@@ -16,6 +16,9 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+# Non-superuser role that runs the ETL and owns the tables (created by migration 0001).
+ETL_ROLE = "etl_writer"
+
 
 class ConfigError(RuntimeError):
     """A required setting is missing or invalid."""
@@ -56,7 +59,8 @@ class PathSettings:
 
 @dataclass(frozen=True)
 class Settings:
-    db: DatabaseSettings
+    db: DatabaseSettings  # ETL runtime: etl_writer
+    admin_db: DatabaseSettings  # database owner: migrations and environment checks
     paths: PathSettings
 
 
@@ -70,10 +74,20 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         load_dotenv(PROJECT_ROOT / ".env", override=False)
         environ = os.environ
 
+    host = environ.get("POSTGRES_HOST") or "127.0.0.1"
+    port = _port(_require(environ, "POSTGRES_PORT"))
+    name = _require(environ, "POSTGRES_DB")
     db = DatabaseSettings(
-        host=environ.get("POSTGRES_HOST") or "127.0.0.1",
-        port=_port(_require(environ, "POSTGRES_PORT")),
-        name=_require(environ, "POSTGRES_DB"),
+        host=host,
+        port=port,
+        name=name,
+        user=ETL_ROLE,
+        password=_require(environ, "ETL_WRITER_PASSWORD"),
+    )
+    admin_db = DatabaseSettings(
+        host=host,
+        port=port,
+        name=name,
         user=_require(environ, "POSTGRES_USER"),
         password=_require(environ, "POSTGRES_PASSWORD"),
     )
@@ -86,7 +100,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         samples_dir=_path(environ, "SAMPLES_DIR", data_dir / "samples"),
         contracts_dir=_path(environ, "CONTRACTS_DIR", PROJECT_ROOT / "contracts"),
     )
-    return Settings(db=db, paths=paths)
+    return Settings(db=db, admin_db=admin_db, paths=paths)
 
 
 def _require(environ: Mapping[str, str], name: str) -> str:

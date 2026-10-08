@@ -6,32 +6,43 @@ from pathlib import Path
 
 import pytest
 
-from etl.config import PROJECT_ROOT, ConfigError, load_settings
+from etl.config import ETL_ROLE, PROJECT_ROOT, ConfigError, load_settings
 
 BASE_ENV = {
     "POSTGRES_HOST": "127.0.0.1",
     "POSTGRES_PORT": "5432",
     "POSTGRES_DB": "solarbi",
     "POSTGRES_USER": "solarbi_owner",
-    "POSTGRES_PASSWORD": "p@ss:w/rd#1",
+    "POSTGRES_PASSWORD": "p@ss:w/rd#1",  # dummy value for tests
+    "ETL_WRITER_PASSWORD": "etl-dummy",
 }
 
 
 def test_url_is_built_from_parts_and_percent_encoded() -> None:
     settings = load_settings(BASE_ENV)
     assert (
-        settings.db.url == "postgresql://solarbi_owner:p%40ss%3Aw%2Frd%231@127.0.0.1:5432/solarbi"
+        settings.admin_db.url
+        == "postgresql://solarbi_owner:p%40ss%3Aw%2Frd%231@127.0.0.1:5432/solarbi"
     )
+
+
+def test_etl_connects_as_etl_writer_and_admin_as_owner() -> None:
+    settings = load_settings(BASE_ENV)
+    assert settings.db.user == ETL_ROLE == "etl_writer"
+    assert settings.admin_db.user == "solarbi_owner"
+    assert (settings.db.host, settings.db.port, settings.db.name) == ("127.0.0.1", 5432, "solarbi")
 
 
 def test_password_never_appears_in_repr_or_safe_url() -> None:
     settings = load_settings(BASE_ENV)
     assert "p@ss" not in repr(settings)
-    assert settings.db.safe_url == "postgresql://solarbi_owner:***@127.0.0.1:5432/solarbi"
+    assert "etl-dummy" not in repr(settings)
+    assert settings.admin_db.safe_url == "postgresql://solarbi_owner:***@127.0.0.1:5432/solarbi"
 
 
 @pytest.mark.parametrize(
-    "missing", ["POSTGRES_PORT", "POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD"]
+    "missing",
+    ["POSTGRES_PORT", "POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD", "ETL_WRITER_PASSWORD"],
 )
 def test_missing_required_variable_raises(missing: str) -> None:
     env = {k: v for k, v in BASE_ENV.items() if k != missing}
