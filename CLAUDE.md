@@ -16,8 +16,8 @@ focus: **operational monitoring — power over time and fault detection**.
 | Phase | Name | Status |
 |---|---|---|
 | 0 | Foundations: repo, local infra, conventions | done |
-| 1 | Architecture & data contract | **next** |
-| 2 | ETL (Bronze -> Silver -> Gold) with quality rules | pending |
+| 1 | Architecture & data contract | done |
+| 2 | ETL (Bronze -> Silver -> Gold) with quality rules | **next** |
 | 3 | Dashboards (Grafana + Power BI) | pending |
 | 4 | Research | pending |
 | 5 | Delivery | pending |
@@ -30,17 +30,24 @@ Each phase arrives as a separate prompt. Do not start a phase that was not reque
 
 Medallion, single PostgreSQL 16 + TimescaleDB database (`docker-compose.yml`, service `db`):
 
-- **Bronze**: raw CSV in `data/bronze/` (`telemetria.csv` from `etl/simulador.py`). Immutable.
-- **Silver**: `silver.lectura_5min`, one row per `(dispositivo_id, ts)`, cleaned and validated
-  against the data contract.
-- **Gold**: `dwh.fact_energia_dia`, PK `(fecha_key, dispositivo_key)`, loaded with an idempotent
-  UPSERT (`INSERT ... ON CONFLICT ... DO UPDATE`).
-- **DQ**: `dq.etl_run_log` and rule results; every ETL run is logged.
-- **Consumers**: Grafana (service `grafana`, role `grafana_reader`) and Power BI Desktop
-  (role `powerbi_reader`). Both are read-only through the group role `bi_readonly`
-  (`silver`, `dwh`, `dq`; never `bronze`).
+- **Contract**: `contracts/telemetria.yaml` (v1.0.0, validated by `contracts/telemetria.schema.json`
+  + `etl/contract.py`) defines source format, time zone, columns, ranges, quality rules
+  (`reject | flag | dedupe`), fault rules, devices/sites and SLA. Load it with
+  `etl.contract.load_contract(path)`.
+- **Bronze**: raw CSV in `data/bronze/` (`telemetria.csv` from `etl/simulador.py`), landed as text
+  in `bronze.telemetria_raw` with `COPY`. Append-only (a trigger rejects UPDATE/DELETE/TRUNCATE).
+- **Silver**: `silver.lectura_5min` hypertable (7-day chunks), `ts` in UTC, unique
+  `(dispositivo_id, ts)`, `dq_flags text[]` holds ids of failed `flag` rules.
+- **Gold**: `dwh.fact_energia_dia`, PK `(fecha_key, dispositivo_key)`, grain = the site's LOCAL day
+  (never the UTC day), idempotent UPSERT (`INSERT ... ON CONFLICT ... DO UPDATE`). Dimensions
+  `dim_fecha` (filled 2020-2035, `dwh.ensure_dim_fecha()`), `dim_sitio`, `dim_dispositivo`
+  (seeded from the contract).
+- **DQ**: `dq.etl_run_log` (per-run `pct_validas`), `dq.rule_result`, `dq.fault_event`.
+- **Roles**: `etl_writer` (non-superuser, owns all tables, used by the ETL), owner (migrations only),
+  `grafana_reader` / `powerbi_reader` read-only through `bi_readonly` (`silver`, `dwh`, `dq`;
+  never `bronze`).
 
-Diagram: `docs/architecture.md`. Decisions: `docs/adr/` (template `0000-template.md`).
+Diagrams: `docs/architecture.md`. Decisions: `docs/adr/` (template `0000-template.md`).
 
 ## Language rules
 
@@ -57,7 +64,9 @@ Diagram: `docs/architecture.md`. Decisions: `docs/adr/` (template `0000-template
 - Keys: surrogate keys `<dim>_key` in `dwh`; natural identifiers `<entity>_id`.
 - Columns: snake_case, unit as suffix (`_kw`, `_kwh`, `_wm2`, `_c`), percentages prefixed `pct_`.
 - Timestamps: column `ts`, type `timestamptz`, stored in UTC.
-- SQL files: `sql/init/NN_name.sql|sh` run only on the first start of an empty volume.
+- SQL files: `sql/init/NN_name.sql|sh` run only on the first start of an empty volume
+  (bootstrap only: extension, schemas, reader roles). Everything else is a migration
+  `sql/migrations/NNNN_description.sql`.
 - ADRs: `docs/adr/NNNN-kebab-case-title.md`.
 - Commits: Conventional Commits in Spanish (`feat(etl): ...`, `fix(sql): ...`, `docs: ...`).
   Never "update" or "cambios".
@@ -70,13 +79,26 @@ docker compose up -d                   # start db + grafana
 docker compose ps                      # both must be healthy
 python -m venv .venv; .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
-python scripts/check_env.py            # DB, TimescaleDB, schemas, roles
+python scripts/migrate.py              # apply pending migrations (no-op if none); --status to list
+python scripts/check_env.py            # DB, TimescaleDB, schemas, roles, no pending migrations
 pytest                                 # DB tests skip if the stack is down
 ruff check .
 docker compose down                    # stop; add -v to wipe volumes and re-run sql/init
 ```
 
-Settings come from `etl/config.py` (`load_settings()`), which reads `.env` and env vars.
+Settings come from `etl/config.py` (`load_settings()`), which reads `.env` and env vars:
+`settings.db` is the ETL connection (`etl_writer`), `settings.admin_db` the owner (migrations and
+checks only).
+
+## Migrations workflow
+
+1. Never edit an applied migration (checksum error); never renumber one. Add a new file with the
+   next number: `sql/migrations/NNNN_description.sql` (lowercase, underscores).
+2. Files run as `etl_writer` (so it owns what they create). Only a file that needs the owner
+   (roles, grants, extensions) starts with `-- migrate:run-as owner`.
+3. Each file is one transaction: no `CREATE INDEX CONCURRENTLY`, no continuous aggregate
+   `WITH DATA` (create it `WITH NO DATA` and refresh from the ETL).
+4. Run `python scripts/migrate.py`, then `pytest` (permissions and smoke tests check the result).
 
 ## Hard rules
 
@@ -85,10 +107,12 @@ Settings come from `etl/config.py` (`load_settings()`), which reads `.env` and e
    dataset lives in an ignored folder. `tests/test_repo_hygiene.py` enforces a 5 MB limit.
 2. Bronze is immutable: read it, never rewrite or "fix" it in place.
 3. Every load must be idempotent: re-running the ETL on the same input yields the same tables.
-4. Never hardcode dataset column names outside `contracts/` (see ADR 0002). Code uses the
-   canonical Silver names only.
-5. Grafana and Power BI connect with read-only roles, never the owner.
-6. Pin image tags and Python dependencies to exact versions; never `latest`.
-7. Ask before pushing, creating a GitHub repository or any other remote resource.
-8. Do not touch the sibling folder `../consulta/` (written research).
-9. Docs and commands must work in PowerShell on Windows; no bash-only entry points.
+4. Only `contracts/` knows source column names, units, ranges and thresholds (ADR 0002). Code uses
+   the canonical Silver names and reads every rule and threshold from the contract.
+5. Grafana and Power BI connect with read-only roles, never the owner. The ETL connects as
+   `etl_writer`, never the owner.
+6. Store `ts` in UTC; daily grain is the site's local day (ADR 0004).
+7. Pin image tags and Python dependencies to exact versions; never `latest`.
+8. Ask before pushing, creating a GitHub repository or any other remote resource.
+9. Do not modify the sibling folder `../consulta/` (written research and phase prompts; read-only).
+10. Docs and commands must work in PowerShell on Windows; no bash-only entry points.
