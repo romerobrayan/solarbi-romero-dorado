@@ -1,0 +1,21 @@
+# Normalize line endings in the repository; files mounted into Linux
+# containers (shell, SQL, provisioning YAML) are always checked out with LF.
+* text=auto
+
+*.sh    text eol=lf
+*.sql   text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.py    text eol=lf
+*.md    text eol=lf
+*.ps1   text eol=crlf
+
+# Binary formats: never diff or normalize.
+*.pbix  binary
+*.abf   binary
+*.pdf   binary
+*.png   binary
+*.jpg   binary
+*.xlsx  binary
+*.parquet binary

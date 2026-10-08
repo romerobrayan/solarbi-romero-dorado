@@ -1,0 +1,62 @@
+# ---------------------------------------------------------------------------
+# Secrets: only the template is versioned.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---------------------------------------------------------------------------
+# IDEs and OS files
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------------------------------------------------------------------------
+# Power BI: the .pbip project (text) is the source of truth.
+# Local settings, the model cache and binary .pbix snapshots are not versioned.
+# ---------------------------------------------------------------------------
+**/.pbi/localSettings.json
+**/.pbi/cache.abf
+*.pbix
+
+# ---------------------------------------------------------------------------
+# Data: nothing under bronze/ or silver/ is committed by default.
+# SIZE NOTE: the only exceptions are the small simulator outputs (~870 rows,
+# well under 1 MB) that the professor wants in the repo. The real dataset
+# (4M+ rows) must NEVER be committed: keep it in a subfolder such as
+# data/bronze/real/ (still ignored, because only top-level files are re-included).
+# tests/test_repo_hygiene.py fails if any tracked file under data/ exceeds 5 MB.
+# ---------------------------------------------------------------------------
+data/bronze/*
+!data/bronze/.gitkeep
+!data/bronze/telemetria.csv
+
+data/silver/*
+!data/silver/.gitkeep
+!data/silver/*.csv
+
+# ---------------------------------------------------------------------------
+# Local scratch
+# ---------------------------------------------------------------------------
+*.log
+tmp/
