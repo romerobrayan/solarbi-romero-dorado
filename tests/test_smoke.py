@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import psycopg
 import pytest
+from conftest import unavailable
 
 from etl.config import ConfigError, load_settings
 from scripts.check_env import EnvironmentReport, inspect_environment
@@ -14,11 +15,11 @@ def report() -> EnvironmentReport:
     try:
         settings = load_settings()
     except ConfigError as exc:
-        pytest.skip(f"no database settings: {exc}")
+        unavailable(f"no database settings: {exc}")
     try:
         return inspect_environment(settings)
     except psycopg.OperationalError as exc:
-        pytest.skip(f"database not reachable at {settings.admin_db.safe_url}: {exc}")
+        unavailable(f"database not reachable at {settings.admin_db.safe_url}: {exc}")
 
 
 def test_postgres_16(report: EnvironmentReport) -> None:

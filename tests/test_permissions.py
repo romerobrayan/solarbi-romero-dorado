@@ -13,6 +13,7 @@ from collections.abc import Iterator
 
 import psycopg
 import pytest
+from conftest import unavailable
 from psycopg import sql
 
 from etl.config import ConfigError, DatabaseSettings, Settings, load_settings
@@ -28,11 +29,11 @@ def settings() -> Settings:
     try:
         settings = load_settings()
     except ConfigError as exc:
-        pytest.skip(f"no database settings: {exc}")
+        unavailable(f"no database settings: {exc}")
     try:
         _connect(settings.db).close()
     except psycopg.OperationalError as exc:
-        pytest.skip(f"cannot log in as etl_writer (stack down or migrations not applied): {exc}")
+        unavailable(f"cannot log in as etl_writer (stack down or migrations not applied): {exc}")
     return settings
 
 
