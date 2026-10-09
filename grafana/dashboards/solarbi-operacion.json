@@ -1,0 +1,659 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "datasource": {
+          "type": "datasource",
+          "uid": "grafana"
+        },
+        "enable": true,
+        "filter": {
+          "exclude": false,
+          "ids": [
+            1
+          ]
+        },
+        "iconColor": "rgba(255, 196, 0, 0.12)",
+        "name": "Horario solar (09:00–15:00)",
+        "target": {
+          "queryType": "timeRegions",
+          "refId": "Anno",
+          "timeRegion": {
+            "from": "09:00",
+            "timezone": "America/Bogota",
+            "to": "15:00"
+          }
+        }
+      },
+      {
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "solarbi-postgres"
+        },
+        "enable": true,
+        "filter": {
+          "exclude": false,
+          "ids": [
+            1
+          ]
+        },
+        "iconColor": "red",
+        "name": "Eventos de falla (dq.fault_event)",
+        "target": {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT ts_inicio AS \"time\",\n       ts_fin AS timeend,\n       rule_id || ' · ' || severity || ' · ' || lecturas || ' lecturas' AS text,\n       rule_id AS tags\nFROM dq.fault_event\nWHERE $__timeFilter(ts_inicio)\n  AND dispositivo_id IN ($dispositivo)",
+          "refId": "Anno"
+        }
+      }
+    ]
+  },
+  "description": "Monitoreo operativo (Grupo 01): potencia en el tiempo, detección de fallas y calidad del dato. PostgreSQL + TimescaleDB, usuario de solo lectura grafana_reader.",
+  "editable": true,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "solarbi-postgres"
+      },
+      "description": "Lecturas de silver.lectura_5min. Línea roja: 0,01 kW (umbral de la alerta y de la regla zero_power_daylight del contrato). Franja: horario solar 09:00–15:00. Anotaciones rojas: eventos de dq.fault_event.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "kW",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "decimals": 2,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.01
+              }
+            ]
+          },
+          "unit": "kwatt"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "Irradiancia.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "Wm2"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "W/m²"
+              },
+              {
+                "id": "custom.thresholdsStyle",
+                "value": {
+                  "mode": "off"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "yellow",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "solarbi-postgres"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT ts AS \"time\",\n       'Potencia (kW) · ' || dispositivo_id AS metric,\n       p_ac_kw AS value\nFROM silver.lectura_5min\nWHERE $__timeFilter(ts)\n  AND dispositivo_id IN ($dispositivo)\nORDER BY 1",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "solarbi-postgres"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT ts AS \"time\",\n       'Irradiancia (W/m²) · ' || dispositivo_id AS metric,\n       irradiancia_wm2 AS value\nFROM silver.lectura_5min\nWHERE $__timeFilter(ts)\n  AND dispositivo_id IN ($dispositivo)\nORDER BY 1",
+          "refId": "B"
+        }
+      ],
+      "title": "Potencia AC cada 5 minutos (kW) e irradiancia",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "solarbi-postgres"
+      },
+      "description": "Promedio horario con $__timeGroupAlias(ts, '1h'); con TimescaleDB activo en el datasource se traduce a time_bucket.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 70,
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "decimals": 2,
+          "min": 0,
+          "unit": "kwatt"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 14,
+        "x": 0,
+        "y": 10
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "solarbi-postgres"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(ts, '1h'),\n       'Promedio horario · ' || dispositivo_id AS metric,\n       avg(p_ac_kw) AS potencia_promedio_kw\nFROM silver.lectura_5min\nWHERE $__timeFilter(ts)\n  AND dispositivo_id IN ($dispositivo)\nGROUP BY 1, 2\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Potencia promedio por hora (kW)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "solarbi-postgres"
+      },
+      "description": "Lee dwh.fact_energia_dia (Gold) para el día de la variable $dia. Debe coincidir con la medida 'Energía total (kWh)' de Power BI filtrada a ese día. Datos válidos = lecturas válidas / esperadas (cociente de sumas).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Energía del día"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "kwatth"
+              },
+              {
+                "id": "decimals",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Datos válidos"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "green",
+                      "value": 95
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cumple SLA"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "0": {
+                        "color": "red",
+                        "index": 1,
+                        "text": "No"
+                      },
+                      "1": {
+                        "color": "green",
+                        "index": 0,
+                        "text": "Sí"
+                      }
+                    },
+                    "type": "value"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 14,
+        "y": 10
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "solarbi-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT sum(f.energia_kwh) AS \"Energía del día\",\n       round(100.0 * sum(f.lecturas_validas) / sum(f.lecturas_esperadas), 2) AS \"Datos válidos\",\n       bool_and(f.cumple_sla)::int AS \"Cumple SLA\"\nFROM dwh.fact_energia_dia AS f\nJOIN dwh.dim_dispositivo AS d USING (dispositivo_key)\nWHERE f.fecha_key = $dia\n  AND d.dispositivo_id IN ($dispositivo)",
+          "refId": "A"
+        }
+      ],
+      "title": "Energía del día seleccionado (${dia:text})",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "solarbi-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Severidad"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "critical": {
+                        "color": "red",
+                        "index": 0
+                      },
+                      "warning": {
+                        "color": "orange",
+                        "index": 1
+                      }
+                    },
+                    "type": "value"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "id": 6,
+      "options": {
+        "cellHeight": "sm",
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "solarbi-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT ts_inicio AS \"Inicio\",\n       ts_fin AS \"Fin\",\n       dispositivo_id AS \"Dispositivo\",\n       rule_id AS \"Regla\",\n       severity AS \"Severidad\",\n       lecturas AS \"Lecturas\",\n       round(extract(epoch FROM ts_fin - ts_inicio) / 60) AS \"Minutos\"\nFROM dq.fault_event\nWHERE $__timeFilter(ts_inicio)\n  AND dispositivo_id IN ($dispositivo)\nORDER BY ts_inicio DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Eventos de falla (dq.fault_event)",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "solarbi-postgres"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Estado"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "failed": {
+                        "color": "red",
+                        "index": 1
+                      },
+                      "running": {
+                        "color": "blue",
+                        "index": 2
+                      },
+                      "succeeded": {
+                        "color": "green",
+                        "index": 0
+                      }
+                    },
+                    "type": "value"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 14,
+        "x": 0,
+        "y": 25
+      },
+      "id": 4,
+      "options": {
+        "cellHeight": "sm",
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "solarbi-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT started_at AS \"Inicio\",\n       source_file AS \"Archivo\",\n       status AS \"Estado\",\n       bronze_status AS \"Bronze\",\n       filas_leidas AS \"Leídas\",\n       filas_validas AS \"Válidas\",\n       pct_validas AS \"% válidas\",\n       duracion_s AS \"Duración (s)\"\nFROM dq.etl_run_log\nORDER BY started_at DESC\nLIMIT 20",
+          "refId": "A"
+        }
+      ],
+      "title": "Calidad: últimas corridas del ETL (dq.etl_run_log)",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "solarbi-postgres"
+      },
+      "description": "Suma de dq.rule_result de las corridas del rango que cargaron un archivo nuevo en Bronze (las repeticiones no se cuentan dos veces).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 80,
+            "lineWidth": 1
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 14,
+        "y": 25
+      },
+      "id": 5,
+      "options": {
+        "barWidth": 0.8,
+        "groupWidth": 0.7,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "xField": "Regla"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "solarbi-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT r.rule_id || ' (' || r.action || ')' AS \"Regla\",\n       sum(r.filas_afectadas) AS \"Filas\"\nFROM dq.rule_result AS r\nJOIN dq.etl_run_log AS l USING (run_id)\nWHERE $__timeFilter(l.started_at)\n  AND l.bronze_status = 'loaded'\nGROUP BY r.rule_id, r.action\nORDER BY 2 DESC, 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Calidad: filas afectadas por regla (corridas que cargaron datos)",
+      "type": "barchart"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 41,
+  "tags": [
+    "solarbi",
+    "operacion"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "solarbi-postgres"
+        },
+        "definition": "SELECT DISTINCT dispositivo_id FROM silver.lectura_5min WHERE $__timeFilter(ts) ORDER BY 1",
+        "includeAll": true,
+        "label": "Dispositivo",
+        "multi": true,
+        "name": "dispositivo",
+        "options": [],
+        "query": "SELECT DISTINCT dispositivo_id FROM silver.lectura_5min WHERE $__timeFilter(ts) ORDER BY 1",
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "solarbi-postgres"
+        },
+        "definition": "SELECT to_char(d.fecha, 'YYYY-MM-DD') AS __text, f.fecha_key AS __value FROM dwh.fact_energia_dia AS f JOIN dwh.dim_fecha AS d USING (fecha_key) GROUP BY d.fecha, f.fecha_key ORDER BY f.fecha_key DESC",
+        "includeAll": false,
+        "label": "Día (Gold)",
+        "multi": false,
+        "name": "dia",
+        "options": [],
+        "query": "SELECT to_char(d.fecha, 'YYYY-MM-DD') AS __text, f.fecha_key AS __value FROM dwh.fact_energia_dia AS f JOIN dwh.dim_fecha AS d USING (fecha_key) GROUP BY d.fecha, f.fecha_key ORDER BY f.fecha_key DESC",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-3d",
+    "to": "now"
+  },
+  "timezone": "America/Bogota",
+  "title": "SolarBI · Operación de la planta",
+  "uid": "solarbi-operacion"
+}

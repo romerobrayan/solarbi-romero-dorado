@@ -1,7 +1,8 @@
 # Dashboards as code: every JSON file in grafana/dashboards/ (mounted at
 # /etc/grafana/dashboards) is loaded into the "SolarBI" folder.
-# The repo is the source of truth: UI edits are not saved back. To change a
-# dashboard, edit it in the UI, export the JSON, overwrite the file and commit.
+# The repo stays the source of truth. UI edits are allowed while developing;
+# then run "python scripts/export_grafana.py" to write the normalized JSON back
+# to grafana/dashboards/ and commit it (see docs/adr/0008).
 apiVersion: 1
 
 providers:
@@ -10,7 +11,7 @@ providers:
     folder: SolarBI
     type: file
     disableDeletion: true
-    allowUiUpdates: false
+    allowUiUpdates: true
     updateIntervalSeconds: 30
     options:
       path: /etc/grafana/dashboards
