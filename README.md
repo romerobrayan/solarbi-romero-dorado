@@ -89,7 +89,8 @@ infraestructura → migrar → simular → ejecutar el ETL → ejecutarlo otra v
    El repositorio ya trae el archivo con el que se tomaron las evidencias; volver a generarlo
    produce valores distintos, porque el simulador del docente no fija semilla. Para datos
    reproducibles con fallas de planta: `python etl/simulador_fallas.py --seed 42 --inject-faults`
-   (escribe `data/samples/telemetria_fallas_seed42.csv`).
+   (escribe `data/samples/telemetria_fallas_seed42.csv`, del 2 al 4 de octubre, justo antes del
+   archivo del docente: un disparo del inversor el día 3 y un corte de comunicación el día 4).
 
 6. **Ejecutar el ETL (Pasos 2 y 3)** con un solo comando:
 
@@ -145,26 +146,36 @@ Grafana para el operador (lecturas de 5 minutos, alertas, calidad) y Power BI pa
    ```
 
 2. Abrir <http://localhost:3000> (o el `GRAFANA_PORT` elegido) con el usuario y la contraseña de
-   administrador de `.env`. En **Dashboards → SolarBI** está **SolarBI · Operación de la planta**:
-   potencia cada 5 minutos con irradiancia, umbral de 0,01 kW, franja 09:00–15:00 y eventos de falla
+   administrador de `.env`. En **Dashboards → SolarBI** está **SolarBI · Operación de la planta**
+   (por defecto, los últimos 7 días; ningún dato es del futuro): potencia cada 5 minutos con irradiancia, umbral de 0,01 kW, franja 09:00–15:00 y eventos de falla
    como anotaciones; potencia promedio por hora; energía del día elegido en la variable `Día (Gold)`;
    eventos de falla; últimas corridas del ETL y filas afectadas por regla.
-3. La regla **Potencia cero en horario solar** está en **Alerting → Alert rules**. Qué hacer cuando
-   se dispara: [docs/operacion.md](docs/operacion.md#alerta-potencia-cero).
+3. En **Alerting → Alert rules** hay dos reglas:
+   - **Potencia cero en horario solar** (crítica, al webhook): llegan lecturas, pero en cero.
+     Runbook: [docs/operacion.md](docs/operacion.md#alerta-potencia-cero).
+   - **Inversor sin datos en horario solar** (advertencia, al correo): el inversor no envía nada
+     durante 15 minutos. Parte del catálogo de dispositivos, porque una regla sobre las lecturas no
+     ve la ausencia de lecturas. Runbook:
+     [docs/operacion.md](docs/operacion.md#alerta-inversor-sin-datos).
 
-**Ver la alerta en vivo.** Los datos simulados son de días pasados, y una regla de alerta mira los
-últimos minutos. Este script simula el envío IoT (no hay un inversor real): carga las lecturas de
-hoy hasta ahora y luego una lectura cada 5 minutos por el ETL normal, con un disparo del inversor
-unos minutos después. **Ejecútelo entre las 09:00 y las 15:00 hora de Colombia**; fuera de ese
-horario la alerta sigue en Normal, como debe ser.
+**Ver las alertas en vivo.** Los datos simulados son de días pasados, y una regla de alerta mira
+los últimos minutos. Este script simula el envío IoT (no hay un inversor real): carga las lecturas
+de hoy hasta ahora y luego una lectura cada 5 minutos por el ETL normal, con una falla unos minutos
+después. **Ejecútelo entre las 09:00 y las 15:00 hora de Colombia**; fuera de ese horario las
+alertas siguen en Normal, como debe ser. Antes de empezar, la regla "sin datos" puede estar en
+Firing (hoy no ha llegado nada); el respaldo inicial la devuelve a Normal.
 
 ```powershell
 python scripts/replay_live.py --trip-in 5m --trip-minutes 20
+python scripts/replay_live.py --gap-in 5m --gap-minutes 20
 ```
 
-Cada línea muestra la lectura, el resultado del ETL y el estado de la alerta: Normal → Pending →
-Firing (unos 10 minutos después del disparo) → Normal (cuando vuelve la potencia). La notificación
-entregada se ve con:
+Con `--trip-in`, la potencia cae a cero: Normal → Pending → Firing (unos 10 minutos después) →
+Normal cuando vuelve la potencia, y el webhook recibe la notificación. Con `--gap-in`, el inversor
+deja de enviar lecturas: la regla "sin datos" pasa a Firing 15 minutos después de la última lectura
+y vuelve a Normal cuando llega la siguiente. Cada línea muestra la lectura, el resultado del ETL y
+el estado de las dos reglas. La segunda réplica continúa después de la última lectura cargada, sin
+reescribir la primera. La notificación entregada por el webhook se ve con:
 
 ```powershell
 docker compose --profile alerting logs alert-receiver
@@ -266,10 +277,10 @@ instalado en el equipo. Si el puerto 5433 o 3000 ya está ocupado, basta con cam
 | `data/samples/` | Muestras pequeñas versionadas (`telemetria_fallas_seed42.csv`) |
 | `docs/` | Enunciado (PDF), arquitectura, ADRs, operación (`operacion.md`) y evidencias (`evidencias/`) |
 | `etl/` | `run_etl.py` (punto de entrada), `pipeline.py`, `bronze.py`, `sqlgen.py` (SQL generado desde el contrato), `contract.py`, `migrations.py`, `config.py`, `simulador.py` (del docente) y `simulador_fallas.py` |
-| `scripts/` | `migrate.py`, `check_env.py`, `conteos.py`; `replay_live.py` (alerta en vivo), `export_grafana.py` (tablero a JSON), `powerbi_model.py` (medidas DAX en TMDL) |
+| `scripts/` | `migrate.py`, `check_env.py`, `conteos.py`, `purge_days.py` (purga de días); `replay_live.py` (alertas en vivo), `export_grafana.py` (tablero a JSON), `powerbi_model.py` (medidas DAX en TMDL) |
 | `sql/init/` | Arranque de la base de datos: extensión, esquemas y roles de lectura |
 | `sql/migrations/` | Migraciones numeradas que crean las tablas (solo hacia adelante) |
-| `grafana/provisioning/` | Datasource, proveedor de dashboards y alertas (regla, contact points, política), como código |
+| `grafana/provisioning/` | Datasource, proveedor de dashboards y alertas (dos reglas, contact points, política), como código |
 | `grafana/dashboards/` | JSON exportado de los dashboards (fuente de verdad) |
 | `powerbi/` | Proyecto de Power BI en formato `.pbip` (guía en `docs/powerbi.md`) |
 | `tests/` | Pruebas automáticas (pytest) y archivos de prueba (`tests/fixtures/`) |

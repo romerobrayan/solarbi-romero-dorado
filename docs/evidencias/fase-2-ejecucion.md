@@ -176,29 +176,34 @@ solarbi=# SELECT * FROM dwh.fact_energia_dia ORDER BY fecha_key;
 
 ## 5. Archivo con fallas inyectadas
 
-`data/samples/telemetria_fallas_seed42.csv` se generó con
-`python etl/simulador_fallas.py --seed 42 --inject-faults` (días 2026-10-08 a 2026-10-10, para no
-pisar los datos del simulador del docente). Incluye un disparo del inversor (potencia 0 de 12:00 a
-12:40 del segundo día, con irradiancia normal) y un corte de comunicación (sin lecturas de 10:00 a
-10:20 del tercer día).
+`data/samples/telemetria_fallas_seed42.csv` se genera con el simulador extendido (semilla fija: los
+mismos argumentos producen siempre el mismo archivo). Cubre del **2 al 4 de octubre de 2026**, los
+tres días anteriores al archivo del docente, para no pisar sus datos ni quedar en el futuro. Incluye
+un disparo del inversor (potencia 0 de 12:00 a 12:40 del segundo día, con irradiancia normal) y un
+corte de comunicación (sin lecturas de 10:00 a 10:20 del tercer día).
+
+```
+$ python etl/simulador_fallas.py --seed 42 --inject-faults
+883 filas escritas en data\samples\telemetria_fallas_seed42.csv
+```
 
 ```
 $ python -m etl.run_etl --file data/samples/telemetria_fallas_seed42.csv
-[1/8] Contrato y archivo                              ok    0.03 s
+[1/8] Contrato y archivo                              ok    0.04 s
       contrato telemetria v1.1.0; archivo data/samples/telemetria_fallas_seed42.csv
-      sha256 11af6d489ba97636fed81cd4343e79e1d26650e0e3233ac967a7d32538eb5007
+      sha256 1ae0fe6c169243cce70658a8c3911623cf8072fb26d030f8aea76f8ad668d89c
 [2/8] Abrir corrida en dq.etl_run_log                 ok    0.01 s
-      run_id b33145a3-2bf7-4e54-924c-186393f267e4
-[3/8] Bronze                                          ok    0.02 s
+      run_id 218cbb39-3d00-4304-8dcd-351a9a666041
+[3/8] Bronze                                          ok    0.03 s
       883 filas copiadas a bronze.telemetria_raw
-[4/8] Silver (reglas de calidad + UPSERT)             ok    0.07 s
+[4/8] Silver (reglas de calidad + UPSERT)             ok    0.11 s
 [5/8] Dimensiones                                     ok    0.02 s
-[6/8] Gold (dwh.fact_energia_dia por día local)       ok    0.01 s
-[7/8] Fallas (dq.fault_event)                         ok    0.09 s
-[8/8] Cerrar corrida (succeeded)                      ok    0.00 s
+[6/8] Gold (dwh.fact_energia_dia por día local)       ok    0.02 s
+[7/8] Fallas (dq.fault_event)                         ok    0.03 s
+[8/8] Cerrar corrida (succeeded)                      ok    0.01 s
 
 Reporte de calidad (Paso 2)
-Corrida                 : b33145a3-2bf7-4e54-924c-186393f267e4
+Corrida                 : 218cbb39-3d00-4304-8dcd-351a9a666041
 Archivo                 : data/samples/telemetria_fallas_seed42.csv (contrato v1.1.0)
 Bronze                  : cargado (883 filas nuevas)
 Filas leídas            : 883
@@ -222,10 +227,179 @@ Eventos detectados en `dq.fault_event` (horas en hora local):
 solarbi=# SELECT fault_id, dispositivo_id, rule_id, severity, ts_inicio AT TIME ZONE 'America/Bogota' AS inicio_local, ts_fin AT TIME ZONE 'America/Bogota' AS fin_local, lecturas FROM dq.fault_event ORDER BY ts_inicio;
  fault_id | dispositivo_id |         rule_id         | severity |    inicio_local     |      fin_local      | lecturas 
 ----------+----------------+-------------------------+----------+---------------------+---------------------+----------
-        1 | 1              | zero_power_daylight     | critical | 2026-10-09 12:00:00 | 2026-10-09 12:40:00 |        8
-        2 | 1              | missing_daytime_reading | warning  | 2026-10-10 10:00:00 | 2026-10-10 10:20:00 |        4
+        3 | 1              | zero_power_daylight     | critical | 2026-10-03 12:00:00 | 2026-10-03 12:40:00 |        8
+        4 | 1              | missing_daytime_reading | warning  | 2026-10-04 10:00:00 | 2026-10-04 10:20:00 |        4
 (2 rows)
 ```
+
+Conteos finales: Silver, Gold y los eventos quedan del 2 al 7 de octubre; Bronze conserva todo lo
+que se recibió, incluido lo purgado (sección 5.1).
+
+```
+$ python scripts/conteos.py
+tabla                       filas
+bronze.telemetria_raw        2904
+silver.lectura_5min          1685
+dwh.fact_energia_dia            6
+dq.fault_event                  2
+dq.etl_run_log                 11
+
+fecha_key  disp.   energia_kwh  lecturas  % válidos
+20261002   1           26.9448       284      98.61
+20261003   1           24.9322       284      98.61
+20261004   1           25.5603       275      95.49
+20261005   1           27.4233       282      97.92
+20261006   1           26.3838       279      96.88
+20261007   1           27.1486       281      97.57
+```
+
+### 5.1 Cambio de fechas del archivo con fallas (fase 3.1)
+
+La primera versión de este archivo empezaba el 8 de octubre de 2026, el día de la ejecución, y
+llegaba al 10: parte de sus lecturas eran del futuro, y para verlas el tablero de Grafana tenía que
+terminar en `now+2d`. El simulador ahora empieza el 2 de octubre, y los días 8 a 10 se retiraron
+con `scripts/purge_days.py`, que se ejecuta como `etl_writer` en una sola transacción. La purga
+también se llevó lo que la réplica en vivo de la fase 3 había cargado ese día.
+
+Bronze no se puede borrar ni modificar (su *trigger* lo impide), así que la purga **no borra**
+Bronze: su fila en `dq.purga_log` (migración 0008) marca como reemplazadas las filas de Bronze de
+esos días que se cargaron antes de la purga, y el ETL ya no las transforma
+([ADR 0007](../adr/0007-elt-in-sql-generated-from-contract.md#update--phase-31-2026-10-08-purging-days-without-touching-bronze)).
+
+Migración:
+
+```
+Database: postgresql://solarbi_owner:***@127.0.0.1:5433/solarbi
+  applied 0008_dq_purga_log (78 ms)
+Applied 1 migration(s); database is at version 0008.
+etl_writer login OK
+```
+
+Antes de la purga:
+
+```
+$ python scripts/conteos.py
+tabla                       filas
+bronze.telemetria_raw        2021
+silver.lectura_5min          1689
+dwh.fact_energia_dia            6
+dq.fault_event                  2
+dq.etl_run_log                  8
+
+fecha_key  disp.   energia_kwh  lecturas  % válidos
+20261005   1           27.4233       282      97.92
+20261006   1           26.3838       279      96.88
+20261007   1           27.1486       281      97.57
+20261008   1           27.4413       288     100.00
+20261009   1           24.9322       284      98.61
+20261010   1           25.5603       275      95.49
+```
+
+Sin `--apply`, la purga solo informa y revierte:
+
+```
+$ python scripts/purge_days.py --from 2026-10-08 --to 2026-10-10 --motivo "Muestra simulada con fallas fechada del 8 al 10 de octubre (incluye días futuros); se reemplaza por la del 2 al 4 de octubre (fase 3.1)"
+Purga de días 2026-10-08 a 2026-10-10 (America/Bogota)
+  rango             2026-10-08 05:00 UTC -> 2026-10-11 05:00 UTC (fin excluido)
+  bronze.telemetria_raw   1142 filas marcadas como reemplazadas (no se borran: Bronze es de solo inserción)
+  silver.lectura_5min      847 filas borradas
+  dwh.fact_energia_dia       3 filas borradas
+  dq.fault_event             2 eventos borrados
+SIMULACIÓN: no se borró nada (se revirtió). Agregue --apply para ejecutarla.
+exit=0
+```
+
+Con `--apply`; después, los conteos (Bronze no cambia):
+
+```
+$ python scripts/purge_days.py --from 2026-10-08 --to 2026-10-10 --motivo "Muestra simulada con fallas fechada del 8 al 10 de octubre (incluye días futuros); se reemplaza por la del 2 al 4 de octubre (fase 3.1)" --apply
+Purga de días 2026-10-08 a 2026-10-10 (America/Bogota)
+  rango             2026-10-08 05:00 UTC -> 2026-10-11 05:00 UTC (fin excluido)
+  bronze.telemetria_raw   1142 filas marcadas como reemplazadas (no se borran: Bronze es de solo inserción)
+  silver.lectura_5min      847 filas borradas
+  dwh.fact_energia_dia       3 filas borradas
+  dq.fault_event             2 eventos borrados
+Aplicada y registrada en dq.purga_log (purga_id 8e394931-4253-489c-8025-fe62a3dd4eab).
+exit=0
+
+$ python scripts/conteos.py
+tabla                       filas
+bronze.telemetria_raw        2021
+silver.lectura_5min           842
+dwh.fact_energia_dia            3
+dq.fault_event                  0
+dq.etl_run_log                  8
+
+fecha_key  disp.   energia_kwh  lecturas  % válidos
+20261005   1           27.4233       282      97.92
+20261006   1           26.3838       279      96.88
+20261007   1           27.1486       281      97.57
+```
+
+Registro de la purga:
+
+```
+solarbi=# SELECT dia_desde, dia_hasta, zona_horaria, ts_desde, ts_hasta, ejecutada_por, filas_bronze_reemplazadas AS bronze, filas_silver AS silver, filas_gold AS gold, eventos_falla AS fallas, motivo FROM dq.purga_log;
+ dia_desde  | dia_hasta  |  zona_horaria  |        ts_desde        |        ts_hasta        | ejecutada_por | bronze | silver | gold | fallas |                                                                 motivo                                                                  
+------------+------------+----------------+------------------------+------------------------+---------------+--------+--------+------+--------+-----------------------------------------------------------------------------------------------------------------------------------------
+ 2026-10-08 | 2026-10-10 | America/Bogota | 2026-10-08 05:00:00+00 | 2026-10-11 05:00:00+00 | etl_writer    |   1142 |    847 |    3 |      2 | Muestra simulada con fallas fechada del 8 al 10 de octubre (incluye días futuros); se reemplaza por la del 2 al 4 de octubre (fase 3.1)
+(1 row)
+```
+
+Volver a ejecutar el archivo viejo (mismo SHA-256, así que se reutilizan sus filas de Bronze) **no**
+trae de vuelta los días purgados: sus 883 filas aparecen como reemplazadas y no se lee ninguna. Se
+ejecutó dos veces; la primera, antes de agregar la línea "Reemplazadas (purga)" al reporte, dio el
+mismo resultado (por eso `dq.etl_run_log` suma dos corridas).
+
+```
+$ python -m etl.run_etl --file data/samples/telemetria_fallas_seed42.csv   # archivo viejo (8-10 oct), después de la purga
+[1/8] Contrato y archivo                              ok    0.12 s
+      contrato telemetria v1.1.0; archivo data/samples/telemetria_fallas_seed42.csv
+      sha256 11af6d489ba97636fed81cd4343e79e1d26650e0e3233ac967a7d32538eb5007
+[2/8] Abrir corrida en dq.etl_run_log                 ok    0.01 s
+      run_id c432b705-a2bb-45dd-a782-4ca59604ed0c
+[3/8] Bronze                                          ok    0.01 s
+      archivo ya cargado (mismo sha256): se reutilizan sus filas de Bronze de la corrida b33145a3-2bf7-4e54-924c-186393f267e4
+[4/8] Silver (reglas de calidad + UPSERT)             ok    0.08 s
+[5/8] Dimensiones                                     ok    0.03 s
+[6/8] Gold (dwh.fact_energia_dia por día local)       ok    0.01 s
+[7/8] Fallas (dq.fault_event)                         ok    0.03 s
+[8/8] Cerrar corrida (succeeded)                      ok    0.00 s
+
+Reporte de calidad (Paso 2)
+Corrida                 : c432b705-a2bb-45dd-a782-4ca59604ed0c
+Archivo                 : data/samples/telemetria_fallas_seed42.csv (contrato v1.1.0)
+Bronze                  : omitido: archivo ya cargado (filas de la corrida b33145a3-2bf7-4e54-924c-186393f267e4)
+Reemplazadas (purga)    : 883 filas de Bronze en días purgados (dq.purga_log): no se transforman
+Filas leídas            : 0
+Rechazadas por regla    : missing_key=0, invalid_format=0, unknown_device=0, off_grid=0, range_p_ac_kw=0, missing_p_ac_kw=0
+Rechazadas (distintas)  : 0
+Deduplicadas            : 0
+Marcadas (flag)         : snapped_to_grid=0, missing_irradiancia=0, range_irradiancia=0, range_temp_modulo=0  (0 filas)
+Filas válidas           : 0
+% datos válidos         : 0.00 %
+Días cargados en Gold   : 0   (energía total = 0.000 kWh)
+Eventos de falla        : 0
+
+Nota: los conteos por regla pueden solaparse (una fila puede fallar varias reglas).
+Cuadre: leídas = válidas + rechazadas distintas + deduplicadas -> 0 = 0 + 0 + 0 (OK)
+exit=0
+
+$ python scripts/conteos.py
+tabla                       filas
+bronze.telemetria_raw        2021
+silver.lectura_5min           842
+dwh.fact_energia_dia            3
+dq.fault_event                  0
+dq.etl_run_log                 10
+
+fecha_key  disp.   energia_kwh  lecturas  % válidos
+20261005   1           27.4233       282      97.92
+20261006   1           26.3838       279      96.88
+20261007   1           27.1486       281      97.57
+```
+
+Después se generó y cargó el archivo nuevo, con las salidas del comienzo de esta sección.
 
 ## 6. SQL generado desde el contrato
 

@@ -36,6 +36,8 @@ Medallion, single PostgreSQL 16 + TimescaleDB database (`docker-compose.yml`, se
   and a changelog. Load it with `etl.contract.load_contract(path)`.
 - **Bronze**: raw CSV in `data/bronze/` (`telemetria.csv` from `etl/simulador.py`), landed as text
   in `bronze.telemetria_raw` with `COPY`. Append-only (a trigger rejects UPDATE/DELETE/TRUNCATE).
+  A day purge (`scripts/purge_days.py`) never deletes Bronze: its `dq.purga_log` row marks the
+  older Bronze rows of those days superseded and `stage_sql` skips them (ADR 0007 update).
 - **Silver**: `silver.lectura_5min` hypertable (7-day chunks), `ts` in UTC snapped to the grid
   (original in `ts_origen`), unique `(dispositivo_id, ts)`, `dq_flags text[]` holds ids of failed
   `flag` rules.
@@ -44,7 +46,7 @@ Medallion, single PostgreSQL 16 + TimescaleDB database (`docker-compose.yml`, se
   `dim_fecha` (filled 2020-2035, `dwh.ensure_dim_fecha()`), `dim_sitio`, `dim_dispositivo`
   (seeded from the contract).
 - **DQ**: `dq.etl_run_log` (per-run `pct_validas`, distinct totals that reconcile:
-  leidas = validas + rechazadas + deduplicadas), `dq.rule_result`, `dq.fault_event`.
+  leidas = validas + rechazadas + deduplicadas), `dq.rule_result`, `dq.fault_event`, `dq.purga_log`.
 - **ETL (ELT, ADR 0007)**: `etl/run_etl.py` (CLI) -> `etl/pipeline.py` (one transaction per run)
   -> `etl/bronze.py` (COPY, skip by SHA-256) and `etl/sqlgen.py` (all SQL generated from the
   contract with `psycopg.sql`; never format SQL strings; run ids and values as `sql.Literal`).
@@ -53,10 +55,13 @@ Medallion, single PostgreSQL 16 + TimescaleDB database (`docker-compose.yml`, se
   never `bronze`).
 
 - **Grafana** (ADR 0008): dashboard `grafana/dashboards/solarbi-operacion.json` (provisioned,
-  UI edits allowed, then `scripts/export_grafana.py` writes it back normalized). Alerting in
-  `grafana/provisioning/alerting/`: rule `Potencia cero en horario solar` on Silver (thresholds must
-  match the contract; tests compare them), webhook contact point to the `alert-receiver` service
-  (compose profile `alerting`), email contact point for production. Rule files are NOT
+  UI edits allowed, then `scripts/export_grafana.py` writes it back normalized; default range
+  `now-7d`, never future data). Alerting in `grafana/provisioning/alerting/`: two rules on Silver,
+  `Potencia cero en horario solar` (critical, latest reading at zero, `noDataState: OK`) and
+  `Inversor sin datos en horario solar` (warning, catalog-driven: `dim_dispositivo` LEFT JOIN the
+  last 15 min); thresholds/windows must match the contract (tests compare them). Webhook contact
+  point to the `alert-receiver` service (compose profile `alerting`) for critical, email contact
+  point (default route, production) for the rest. Rule files are NOT
   env-interpolated by Grafana: write `$__timeFilter` / `{{ $labels.x }}` literally (never `$$`);
   contact-point files are (`${VAR}`).
 - **Power BI** (ADR 0008): Import mode, `powerbi_reader`, Gold only. Brayan saves
@@ -103,7 +108,9 @@ python etl/simulador_fallas.py --seed 42 --inject-faults   # -> data/samples/
 python -m etl.run_etl --file data/bronze/telemetria.csv     # the ETL (re-run = idempotent)
 python scripts/conteos.py              # row counts per layer + energy per day
 docker compose --profile alerting up -d                     # + webhook receiver for alerts
-python scripts/replay_live.py --trip-in 5m --trip-minutes 20   # live alert demo, run 09:00-15:00 local
+python scripts/replay_live.py --trip-in 5m --trip-minutes 20   # live zero-power alert, run 09:00-15:00 local
+python scripts/replay_live.py --gap-in 5m --gap-minutes 20     # live silent-inverter alert, same hours
+python scripts/purge_days.py --from D --to D --motivo "..."    # dry run; --apply purges (Bronze is marked)
 python scripts/export_grafana.py       # dashboard JSON from Grafana into the repo (--check compares)
 python scripts/powerbi_model.py --apply   # TMDL relationships + measures, after the .pbip is saved
 pytest                                 # DB tests skip if the stack is down (fail if SOLARBI_REQUIRE_DB=1)

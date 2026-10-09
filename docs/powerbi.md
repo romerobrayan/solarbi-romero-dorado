@@ -155,7 +155,7 @@ Opcional: una segmentación con `dim_fecha[fecha]` y otra con `dim_dispositivo[n
 Para que la tarjeta coincida con el reporte del ETL de la Fase 2 (3 días, 80,956 kWh), agrega un
 filtro de página: **Filtros → Filtros en esta página →** arrastra `dim_fecha[fecha]` y elige del
 5 al 7 de octubre de 2026. Sin filtro se ven todos los días cargados (incluidos los del archivo
-con fallas y la réplica en vivo).
+con fallas, del 2 al 4 de octubre, y los de la réplica en vivo).
 
 **Comprobación cruzada con Grafana:** pon una segmentación en un solo día (por ejemplo
 2026-10-06): la tarjeta de energía debe mostrar el mismo valor que el panel "Energía del día
