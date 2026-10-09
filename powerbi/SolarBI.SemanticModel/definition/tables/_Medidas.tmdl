@@ -70,4 +70,3 @@ table _Medidas
 		source = #table(type table [Columna = text], {})
 
 	annotation PBI_ResultType = Table
-
