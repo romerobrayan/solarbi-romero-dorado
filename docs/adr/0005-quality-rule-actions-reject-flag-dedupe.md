@@ -57,5 +57,31 @@ There are two **percentages of valid data**, named differently on purpose:
   adding a rule of an existing kind needs no code.
 - Analysts must know that flagged rows are in Silver; Grafana panels that need clean irradiance
   filter on `dq_flags`.
-- If both a `reject` and a `flag` rule fail on the same row, the row is rejected and counted under
-  both rules in `dq.rule_result`, so the per-rule counts can add up to more than the rejected total.
+- A row can fail several `reject` rules; it is counted under each of them in `dq.rule_result`, so
+  per-rule counts can add up to more than the rejected total (see the update below for how the
+  report reconciles).
+
+## Update — Phase 2 (2026-10-08): counting semantics and new rules
+
+Implemented in `etl/sqlgen.py` (contract 1.1.0):
+
+- **Order**: every rule is evaluated on every row; a row failing any `reject` rule is out. Dedupe
+  runs **after** rejection, among the surviving rows, on the natural key with the timestamp already
+  snapped to the grid, keeping the first by `source_row` (`keys.dedup.keep`). A valid copy therefore
+  survives even when an earlier copy was rejected.
+- **What each count means** (`dq.rule_result.filas_afectadas`):
+  - `reject` rules: rows read that fail the rule (may overlap between rules);
+  - `flag` rules: **valid** rows that keep the mark in `dq_flags` (a rejected row is not "flagged");
+  - the `dedupe` rule: duplicates dropped.
+- **Distinct totals** in `dq.etl_run_log` reconcile exactly, enforced by a CHECK constraint:
+  `filas_leidas = filas_validas + filas_rechazadas + filas_deduplicadas`. `filas_marcadas` counts
+  distinct valid rows with at least one flag.
+- **New rules**: `missing_key` (empty `ts` or `dispositivo_id`), `invalid_format` (a value that does
+  not parse as its type), `unknown_device` (not in the catalog) and `off_grid` (more than
+  `grid.tolerance_seconds` from a 5-minute slot) reject; `snapped_to_grid` flags a reading moved to
+  its slot, whose original timestamp is kept in `silver.lectura_5min.ts_origen`. Snapping plus
+  dedupe guarantee at most 288 readings per local day, so `pct_datos_validos` never exceeds 100 %.
+- The contract loader now requires every non-nullable column to be covered by a `not_null` rule
+  with action `reject`, so a NULL can never abort the Silver load.
+- `missing_daytime_reading` opens an event only after 3 consecutive missing slots (15 minutes):
+  a single rejected reading is a data-quality issue, not a communication outage.

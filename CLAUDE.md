@@ -17,8 +17,8 @@ focus: **operational monitoring — power over time and fault detection**.
 |---|---|---|
 | 0 | Foundations: repo, local infra, conventions | done |
 | 1 | Architecture & data contract | done |
-| 2 | ETL (Bronze -> Silver -> Gold) with quality rules | **next** |
-| 3 | Dashboards (Grafana + Power BI) | pending |
+| 2 | ETL (Bronze -> Silver -> Gold) with quality rules | done |
+| 3 | Dashboards (Grafana + Power BI) | **next** |
 | 4 | Research | pending |
 | 5 | Delivery | pending |
 | 6 | Scale to the real 4M+ row dataset (unknown schema) | pending |
@@ -30,19 +30,24 @@ Each phase arrives as a separate prompt. Do not start a phase that was not reque
 
 Medallion, single PostgreSQL 16 + TimescaleDB database (`docker-compose.yml`, service `db`):
 
-- **Contract**: `contracts/telemetria.yaml` (v1.0.0, validated by `contracts/telemetria.schema.json`
+- **Contract**: `contracts/telemetria.yaml` (v1.1.0, validated by `contracts/telemetria.schema.json`
   + `etl/contract.py`) defines source format, time zone, columns, ranges, quality rules
-  (`reject | flag | dedupe`), fault rules, devices/sites and SLA. Load it with
-  `etl.contract.load_contract(path)`.
+  (`reject | flag | dedupe`), the 5-minute grid (`grid`, ±60 s), fault rules, devices/sites, SLA
+  and a changelog. Load it with `etl.contract.load_contract(path)`.
 - **Bronze**: raw CSV in `data/bronze/` (`telemetria.csv` from `etl/simulador.py`), landed as text
   in `bronze.telemetria_raw` with `COPY`. Append-only (a trigger rejects UPDATE/DELETE/TRUNCATE).
-- **Silver**: `silver.lectura_5min` hypertable (7-day chunks), `ts` in UTC, unique
-  `(dispositivo_id, ts)`, `dq_flags text[]` holds ids of failed `flag` rules.
+- **Silver**: `silver.lectura_5min` hypertable (7-day chunks), `ts` in UTC snapped to the grid
+  (original in `ts_origen`), unique `(dispositivo_id, ts)`, `dq_flags text[]` holds ids of failed
+  `flag` rules.
 - **Gold**: `dwh.fact_energia_dia`, PK `(fecha_key, dispositivo_key)`, grain = the site's LOCAL day
   (never the UTC day), idempotent UPSERT (`INSERT ... ON CONFLICT ... DO UPDATE`). Dimensions
   `dim_fecha` (filled 2020-2035, `dwh.ensure_dim_fecha()`), `dim_sitio`, `dim_dispositivo`
   (seeded from the contract).
-- **DQ**: `dq.etl_run_log` (per-run `pct_validas`), `dq.rule_result`, `dq.fault_event`.
+- **DQ**: `dq.etl_run_log` (per-run `pct_validas`, distinct totals that reconcile:
+  leidas = validas + rechazadas + deduplicadas), `dq.rule_result`, `dq.fault_event`.
+- **ETL (ELT, ADR 0007)**: `etl/run_etl.py` (CLI) -> `etl/pipeline.py` (one transaction per run)
+  -> `etl/bronze.py` (COPY, skip by SHA-256) and `etl/sqlgen.py` (all SQL generated from the
+  contract with `psycopg.sql`; never format SQL strings; run ids and values as `sql.Literal`).
 - **Roles**: `etl_writer` (non-superuser, owns all tables, used by the ETL), owner (migrations only),
   `grafana_reader` / `powerbi_reader` read-only through `bi_readonly` (`silver`, `dwh`, `dq`;
   never `bronze`).
@@ -69,7 +74,8 @@ Diagrams: `docs/architecture.md`. Decisions: `docs/adr/` (template `0000-templat
   `sql/migrations/NNNN_description.sql`.
 - ADRs: `docs/adr/NNNN-kebab-case-title.md`.
 - Commits: Conventional Commits in Spanish (`feat(etl): ...`, `fix(sql): ...`, `docs: ...`).
-  Never "update" or "cambios".
+  Never "update" or "cambios". No `Co-Authored-By` or other AI attribution trailers (owner's
+  decision for this public repo).
 
 ## Commands (PowerShell, repo root)
 
@@ -81,7 +87,11 @@ python -m venv .venv; .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 python scripts/migrate.py              # apply pending migrations (no-op if none); --status to list
 python scripts/check_env.py            # DB, TimescaleDB, schemas, roles, no pending migrations
-pytest                                 # DB tests skip if the stack is down
+python etl/simulador.py                # professor's simulator -> data/bronze/telemetria.csv
+python etl/simulador_fallas.py --seed 42 --inject-faults   # -> data/samples/
+python -m etl.run_etl --file data/bronze/telemetria.csv     # the ETL (re-run = idempotent)
+python scripts/conteos.py              # row counts per layer + energy per day
+pytest                                 # DB tests skip if the stack is down (fail if SOLARBI_REQUIRE_DB=1)
 ruff check .
 docker compose down                    # stop; add -v to wipe volumes and re-run sql/init
 ```
@@ -89,6 +99,13 @@ docker compose down                    # stop; add -v to wipe volumes and re-run
 Settings come from `etl/config.py` (`load_settings()`), which reads `.env` and env vars:
 `settings.db` is the ETL connection (`etl_writer`), `settings.admin_db` the owner (migrations and
 checks only).
+
+Integration tests (`tests/test_etl_integration.py`) run against a throwaway database
+`<POSTGRES_DB>_test` created and dropped by `tests/conftest.py`; never point tests at the dev data.
+CI (`.github/workflows/ci.yml`) bootstraps a fresh TimescaleDB service with `sql/init/*`, migrates,
+and runs ruff + pytest on Python 3.12 and 3.14 with `SOLARBI_REQUIRE_DB=1`.
+
+`etl/simulador.py` is the professor's code, kept verbatim: never reformat or "fix" it (ruff ignores it).
 
 ## Migrations workflow
 

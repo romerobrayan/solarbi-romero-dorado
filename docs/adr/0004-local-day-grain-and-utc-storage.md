@@ -40,6 +40,9 @@ Two different questions depend on time zones:
   no DST. A site with DST would have 23- or 25-hour days; the ETL would then have to compute the
   expected readings per local day instead of using the constant. That is noted for Phase 6.
 - Mixing sites in different time zones still works: each site's day comes from its own zone.
+- Phase 2 note: fault windows are evaluated in the **site's** time zone (`dwh.dim_sitio.zona_horaria`),
+  the same zone that defines the local day, because daylight is a property of the site. Today the
+  source and the only site are both `America/Bogota`, so the two readings of the rule agree.
 - Queries that group by day must use the local day (`AT TIME ZONE`) or join `dim_fecha` through
   the fact table. Grouping a hypertable by `time_bucket('1 day', ts)` alone would silently use UTC
   days; pass the time zone argument (`time_bucket('1 day', ts, 'America/Bogota')`).

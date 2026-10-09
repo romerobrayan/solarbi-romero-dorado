@@ -34,9 +34,10 @@ arquitectura en [docs/adr/](docs/adr/).
 | Git | 2.x | Control de versiones |
 | Power BI Desktop | Reciente, con guardado como proyecto (`.pbip`) | Fases 3 y 7 |
 
-## Cómo reproducir el entorno (PowerShell)
+## Cómo reproducir la práctica (PowerShell)
 
-Todos los comandos se ejecutan desde la raíz del repositorio.
+Todos los comandos se ejecutan desde la raíz del repositorio. El flujo completo es: levantar la
+infraestructura → migrar → simular → ejecutar el ETL → ejecutarlo otra vez → comprobar los conteos.
 
 1. **Crear el archivo de entorno** y cambiar cada valor `change-me` por una contraseña propia
    (sin el carácter `$`):
@@ -46,14 +47,13 @@ Todos los comandos se ejecutan desde la raíz del repositorio.
    notepad .env
    ```
 
-2. **Levantar la infraestructura** (la primera vez descarga las imágenes):
+2. **Levantar la infraestructura** (la primera vez descarga las imágenes) y comprobar que ambos
+   servicios aparecen como `healthy`:
 
    ```powershell
    docker compose up -d
    docker compose ps
    ```
-
-   Ambos servicios deben aparecer como `healthy`.
 
 3. **Crear el entorno virtual e instalar dependencias:**
 
@@ -68,29 +68,62 @@ Todos los comandos se ejecutan desde la raíz del repositorio.
    `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` o usar `.\.venv\Scripts\python.exe`
    directamente.
 
-4. **Crear o actualizar las tablas** con las migraciones (se puede repetir: si no hay nada
-   pendiente, no cambia nada):
+4. **Crear o actualizar las tablas** con las migraciones (repetirlo no cambia nada si no hay
+   pendientes) y verificar el entorno:
 
    ```powershell
    python scripts/migrate.py
+   python scripts/check_env.py
    ```
 
-   La primera vez crea el rol `etl_writer`, las tablas de las capas Bronze, Silver, Gold y de
-   calidad, y activa el inicio de sesión de `etl_writer` con `ETL_WRITER_PASSWORD`. Con
-   `python scripts/migrate.py --status` se ven las migraciones aplicadas y pendientes.
+   La primera vez crea el rol `etl_writer` y las tablas de Bronze, Silver, Gold y calidad.
+   `python scripts/migrate.py --status` lista las migraciones aplicadas y pendientes.
 
-5. **Verificar el entorno:**
+5. **Generar los datos crudos (Paso 1, Bronze).** El simulador del docente escribe
+   `data/bronze/telemetria.csv` (3 días, un inversor de 5 kWp, con anomalías):
 
    ```powershell
-   python scripts/check_env.py
+   python etl/simulador.py
+   ```
+
+   El repositorio ya trae el archivo con el que se tomaron las evidencias; volver a generarlo
+   produce valores distintos, porque el simulador del docente no fija semilla. Para datos
+   reproducibles con fallas de planta: `python etl/simulador_fallas.py --seed 42 --inject-faults`
+   (escribe `data/samples/telemetria_fallas_seed42.csv`).
+
+6. **Ejecutar el ETL (Pasos 2 y 3)** con un solo comando:
+
+   ```powershell
+   python -m etl.run_etl --file data/bronze/telemetria.csv
+   ```
+
+   Imprime los 8 pasos con su duración y el reporte de calidad: filas leídas, rechazadas por cada
+   regla, deduplicadas, marcadas, válidas, porcentaje de datos válidos, días cargados en
+   `dwh.fact_energia_dia` y eventos de falla.
+
+7. **Ejecutarlo otra vez y comprobar que nada cambia (carga idempotente):**
+
+   ```powershell
+   python scripts/conteos.py
+   python -m etl.run_etl --file data/bronze/telemetria.csv
+   python scripts/conteos.py
+   ```
+
+   La segunda corrida reconoce el archivo por su SHA-256, no lo vuelve a copiar a Bronze, pero
+   recalcula Silver y Gold con UPSERT: los conteos y la energía por día quedan idénticos. Las
+   salidas reales están en [docs/evidencias/fase-2-ejecucion.md](docs/evidencias/fase-2-ejecucion.md).
+
+8. **Pruebas y estilo:**
+
+   ```powershell
    pytest
    ruff check .
    ```
 
-   `check_env.py` imprime la versión de PostgreSQL y de TimescaleDB, los esquemas
-   (`bronze`, `dq`, `dwh`, `meta`, `public`, `silver`), los roles y el estado de las migraciones.
+   Las pruebas de integración crean una base temporal `solarbi_test` en el mismo servidor y la
+   borran al terminar, así que nunca tocan los datos de desarrollo.
 
-6. **Abrir Grafana** en <http://localhost:3000> (o el `GRAFANA_PORT` elegido) con el usuario y la
+9. **Abrir Grafana** en <http://localhost:3000> (o el `GRAFANA_PORT` elegido) con el usuario y la
    contraseña de administrador definidos en `.env`. El datasource *SolarBI PostgreSQL* ya viene
    configurado.
 
@@ -98,6 +131,23 @@ Para detener todo: `docker compose down`. Para borrar también los datos y empez
 `docker compose down -v` (en el siguiente arranque se vuelven a ejecutar `sql/init/` y, con
 `python scripts/migrate.py`, todas las migraciones). Nunca hace falta borrar el volumen para
 agregar tablas: los cambios de esquema llegan como migraciones nuevas.
+
+## Programación diaria
+
+El ETL se programaría todos los días a la medianoche, hora de Colombia. Las instrucciones están
+escritas, no instaladas:
+
+```text
+# cron (la zona horaria del servidor debe ser America/Bogota, o CRON_TZ=America/Bogota donde se soporte)
+0 0 * * * cd /ruta/solarbi-romero-dorado && .venv/bin/python -m etl.run_etl --file data/bronze/telemetria.csv
+```
+
+```powershell
+# Programador de tareas de Windows
+schtasks /Create /SC DAILY /ST 00:00 /TN SolarBI_ETL /TR "\"D:\ruta\solarbi-romero-dorado\.venv\Scripts\python.exe\" -m etl.run_etl --file \"D:\ruta\solarbi-romero-dorado\data\bronze\telemetria.csv\""
+```
+
+Detalles, códigos de salida y diagnóstico en [docs/operacion.md](docs/operacion.md).
 
 ## Contrato de datos
 
@@ -161,16 +211,17 @@ instalado en el equipo. Si el puerto 5433 o 3000 ya está ocupado, basta con cam
 | `contracts/` | Contrato de datos (`telemetria.yaml`) y su esquema JSON |
 | `data/bronze/` | CSV crudo e inmutable (solo se versiona la salida pequeña del simulador) |
 | `data/silver/` | Exportaciones limpias (solo archivos pequeños) |
-| `data/samples/` | Muestras pequeñas versionadas |
-| `docs/` | Enunciado (PDF), arquitectura y ADRs |
-| `etl/` | Código del ETL: configuración, contrato, migraciones; `simulador.py` y `run_etl.py` en la fase 2 |
-| `scripts/` | `migrate.py` aplica las migraciones; `check_env.py` verifica el entorno |
+| `data/samples/` | Muestras pequeñas versionadas (`telemetria_fallas_seed42.csv`) |
+| `docs/` | Enunciado (PDF), arquitectura, ADRs, operación (`operacion.md`) y evidencias (`evidencias/`) |
+| `etl/` | `run_etl.py` (punto de entrada), `pipeline.py`, `bronze.py`, `sqlgen.py` (SQL generado desde el contrato), `contract.py`, `migrations.py`, `config.py`, `simulador.py` (del docente) y `simulador_fallas.py` |
+| `scripts/` | `migrate.py` aplica las migraciones; `check_env.py` verifica el entorno; `conteos.py` muestra conteos por capa |
 | `sql/init/` | Arranque de la base de datos: extensión, esquemas y roles de lectura |
 | `sql/migrations/` | Migraciones numeradas que crean las tablas (solo hacia adelante) |
 | `grafana/provisioning/` | Datasource y proveedor de dashboards (configuración como código) |
 | `grafana/dashboards/` | JSON exportado de los dashboards (fuente de verdad) |
 | `powerbi/` | Proyecto de Power BI en formato `.pbip` |
-| `tests/` | Pruebas automáticas (pytest) |
+| `tests/` | Pruebas automáticas (pytest) y archivos de prueba (`tests/fixtures/`) |
+| `.github/workflows/ci.yml` | Integración continua: ruff y pytest con TimescaleDB, en Python 3.12 y 3.14 |
 
 ## Hoja de ruta
 
@@ -178,8 +229,8 @@ instalado en el equipo. Si el puerto 5433 o 3000 ya está ocupado, basta con cam
 |---|---|---|
 | 0 | Fundamentos: repositorio, infraestructura local y convenciones | ✅ Completada |
 | 1 | Arquitectura y contrato de datos | ✅ Completada |
-| 2 | ETL (Bronze → Silver → Gold) con reglas de calidad | ⏳ Siguiente |
-| 3 | Dashboards (Grafana y Power BI) | Pendiente |
+| 2 | ETL (Bronze → Silver → Gold) con reglas de calidad | ✅ Completada |
+| 3 | Dashboards (Grafana y Power BI) | ⏳ Siguiente |
 | 4 | Investigación | Pendiente |
 | 5 | Entrega | Pendiente |
 | 6 | Escalamiento al dataset real (4M+ filas) | Pendiente |

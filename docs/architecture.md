@@ -81,7 +81,7 @@ sumando energía (ver [ADR 0005](adr/0005-quality-rule-actions-reject-flag-dedup
 |---|---|---|---|
 | Bronze | `data/bronze/*.csv` | Archivo tal como llega | Nunca se modifica |
 | Bronze | `bronze.telemetria_raw` | Una fila por fila del archivo, todo como texto | Solo inserción (un *trigger* rechaza UPDATE, DELETE y TRUNCATE) |
-| Silver | `silver.lectura_5min` | Una lectura por `(dispositivo_id, ts)`; `ts` en UTC | Solo entran filas que pasan las reglas `reject` y `dedupe` |
+| Silver | `silver.lectura_5min` | Una lectura por `(dispositivo_id, ts)`; `ts` en UTC, ajustado al intervalo de 5 minutos (la hora original queda en `ts_origen`) | Solo entran filas que pasan las reglas `reject` y `dedupe` |
 | Gold | `dwh.fact_energia_dia` | Un día **local** por dispositivo | UPSERT idempotente sobre `(fecha_key, dispositivo_key)` |
 | Gold | `dwh.dim_fecha`, `dwh.dim_sitio`, `dwh.dim_dispositivo` | Dimensiones del modelo estrella | Sitios y dispositivos salen del contrato |
 | Calidad | `dq.etl_run_log`, `dq.rule_result` | Una fila por corrida y una por regla y corrida | Toda corrida queda registrada |
