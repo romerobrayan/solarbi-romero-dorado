@@ -34,7 +34,9 @@ SECONDS_PER_DAY = 86_400
 # Canonical columns the pipeline cannot work without: the natural key and the
 # power used for energy and fault detection.
 REQUIRED_COLUMNS = ("ts", "dispositivo_id", "p_ac_kw")
+DEVICE_COLUMN = "dispositivo_id"  # canonical column matched against the devices catalog
 NUMERIC_TYPES = ("integer", "float")
+GRID_CHECKS = ("grid", "on_grid")
 
 
 class ContractError(ValueError):
@@ -76,6 +78,22 @@ class SourceSpec:
     timezone: ZoneInfo
     frequency_seconds: int
     allow_extra_columns: bool
+
+
+@dataclass(frozen=True)
+class Grid:
+    """Readings are snapped to slots of frequency_seconds within ±tolerance_seconds."""
+
+    column: str
+    tolerance_seconds: int
+
+
+@dataclass(frozen=True)
+class ChangelogEntry:
+    version: str
+    date: str
+    changes: tuple[str, ...]
+    compatibility: str
 
 
 @dataclass(frozen=True)
@@ -151,6 +169,7 @@ class Contract:
     version: str
     dataset: str
     source: SourceSpec
+    grid: Grid
     columns: tuple[Column, ...]
     natural_key: tuple[str, ...]
     dedup_keep: str
@@ -159,6 +178,7 @@ class Contract:
     sites: tuple[Site, ...]
     devices: tuple[Device, ...]
     sla: Sla
+    changelog: tuple[ChangelogEntry, ...]
 
     @property
     def major_version(self) -> int:
@@ -315,10 +335,37 @@ def _semantic_problems(data: Mapping[str, Any]) -> list[str]:
         elif columns[name]["nullable"]:
             problems.append(f"keys.natural_key: column {name!r} must not be nullable")
 
+    grid = data["grid"]
+    grid_column = columns.get(grid["column"])
+    if grid_column is None or grid_column["type"] != "timestamp":
+        problems.append(f"grid.column: {grid['column']!r} must be a declared timestamp column")
+    elif grid["column"] not in natural_key:
+        problems.append(f"grid.column: {grid['column']!r} must be part of keys.natural_key")
+    if 2 * grid["tolerance_seconds"] >= source["frequency_seconds"]:
+        problems.append(
+            f"grid.tolerance_seconds: {grid['tolerance_seconds']} must be less than half of "
+            f"source.frequency_seconds ({source['frequency_seconds']}), or a reading could "
+            "belong to two slots"
+        )
+
+    # A NULL in a non-nullable column would abort the Silver load; a rule must reject it first.
+    guarded = {
+        name
+        for rule in data["quality_rules"]
+        if rule["check"] == "not_null" and rule["action"] == "reject"
+        for name in rule["columns"]
+    }
+    problems += [
+        f"columns: non-nullable column {name!r} needs a not_null rule with action reject"
+        for name, column in columns.items()
+        if not column["nullable"] and name not in guarded
+    ]
+
     rule_ids = [r["id"] for r in data["quality_rules"]] + [r["id"] for r in data["fault_rules"]]
     problems += _duplicates("quality_rules/fault_rules ids", rule_ids)
     for index, rule in enumerate(data["quality_rules"]):
-        problems += _quality_rule_problems(f"quality_rules[{index}] ({rule['id']})", rule, columns)
+        where = f"quality_rules[{index}] ({rule['id']})"
+        problems += _quality_rule_problems(where, rule, columns, grid["column"])
     for index, rule in enumerate(data["fault_rules"]):
         problems += _fault_rule_problems(f"fault_rules[{index}] ({rule['id']})", rule, columns)
 
@@ -334,6 +381,13 @@ def _semantic_problems(data: Mapping[str, Any]) -> list[str]:
             )
 
     problems += _timezone_problems("sla.freshness.timezone", data["sla"]["freshness"]["timezone"])
+
+    latest = data["changelog"][0]["version"]
+    if latest != data["contract_version"]:
+        problems.append(
+            f"changelog: the first entry is {latest}, but contract_version is "
+            f"{data['contract_version']}; record every version, newest first"
+        )
     return problems
 
 
@@ -355,7 +409,10 @@ def _column_problems(where: str, column: Mapping[str, Any]) -> list[str]:
 
 
 def _quality_rule_problems(
-    where: str, rule: Mapping[str, Any], columns: Mapping[str, Mapping[str, Any]]
+    where: str,
+    rule: Mapping[str, Any],
+    columns: Mapping[str, Mapping[str, Any]],
+    grid_column: str,
 ) -> list[str]:
     problems = [
         f"{where}: column {name!r} is not declared in columns"
@@ -364,6 +421,10 @@ def _quality_rule_problems(
     ]
     if (rule["check"] == "unique") != (rule["action"] == "dedupe"):
         problems.append(f"{where}: check 'unique' and action 'dedupe' go together")
+    if rule["check"] in GRID_CHECKS and rule["columns"] != [grid_column]:
+        problems.append(f"{where}: check {rule['check']!r} applies only to [{grid_column}]")
+    if rule["check"] == "known_device" and rule["columns"] != [DEVICE_COLUMN]:
+        problems.append(f"{where}: check 'known_device' applies only to [{DEVICE_COLUMN}]")
     if rule["check"] == "range":
         problems += [
             f"{where}: column {name!r} has no range to check"
@@ -432,6 +493,10 @@ def _build(path: Path, data: Mapping[str, Any]) -> Contract:
             frequency_seconds=source["frequency_seconds"],
             allow_extra_columns=source.get("allow_extra_columns", False),
         ),
+        grid=Grid(
+            column=data["grid"]["column"],
+            tolerance_seconds=data["grid"]["tolerance_seconds"],
+        ),
         columns=tuple(_build_column(column) for column in data["columns"]),
         natural_key=tuple(data["keys"]["natural_key"]),
         dedup_keep=data["keys"]["dedup"]["keep"],
@@ -470,6 +535,15 @@ def _build(path: Path, data: Mapping[str, Any]) -> Contract:
             schedule_cron=freshness["schedule_cron"],
             timezone=ZoneInfo(freshness["timezone"]),
             max_delay_minutes=freshness["max_delay_minutes"],
+        ),
+        changelog=tuple(
+            ChangelogEntry(
+                version=entry["version"],
+                date=entry["date"],
+                changes=tuple(entry["changes"]),
+                compatibility=entry["compatibility"],
+            )
+            for entry in data["changelog"]
         ),
     )
 

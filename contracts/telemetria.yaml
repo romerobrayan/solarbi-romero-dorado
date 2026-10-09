@@ -5,7 +5,7 @@
 # ranges, quality rules and fault thresholds from here, never from code.
 # Validated by etl/contract.py against contracts/telemetria.schema.json.
 
-contract_version: 1.0.0
+contract_version: 1.1.0
 dataset: telemetria
 description: >-
   Telemetría de inversores fotovoltaicos de la planta SolarBI Pascual: una lectura
@@ -58,6 +58,10 @@ source:
   frequency_seconds: 300
   allow_extra_columns: false
 
+grid:
+  column: ts
+  tolerance_seconds: 60 # within ±60 s of a 5-minute slot: snapped; farther: rejected (off_grid)
+
 columns:
   - name: ts
     source_name: ts
@@ -109,6 +113,39 @@ keys:
     keep: first
 
 quality_rules:
+  - id: missing_key
+    description: Lectura sin marca de tiempo o sin dispositivo; no se puede ubicar.
+    columns: [ts, dispositivo_id]
+    check: not_null
+    action: reject
+  - id: invalid_format
+    description: >-
+      Un valor que no se puede interpretar con el tipo de su columna (por ejemplo, texto en
+      una potencia o una fecha inexistente). La fila no es confiable.
+    columns: [ts, dispositivo_id, p_ac_kw, irradiancia_wm2, temp_modulo_c]
+    check: parseable
+    action: reject
+  - id: unknown_device
+    description: >-
+      Dispositivo que no está en el catálogo (devices). Sin él no hay potencia nominal para
+      validar el rango ni dimensión para cargar Gold.
+    columns: [dispositivo_id]
+    check: known_device
+    action: reject
+  - id: off_grid
+    description: >-
+      Marca de tiempo a más de grid.tolerance_seconds de un intervalo de 5 minutos; no se
+      puede asignar a un intervalo sin inventar datos.
+    columns: [ts]
+    check: grid
+    action: reject
+  - id: snapped_to_grid
+    description: >-
+      Marca de tiempo dentro de la tolerancia pero fuera del intervalo exacto: se ajusta al
+      intervalo y la hora original queda en silver.lectura_5min.ts_origen.
+    columns: [ts]
+    check: on_grid
+    action: flag
   - id: range_p_ac_kw
     description: >-
       Potencia fuera del rango físico (negativa o mayor que 1,1 veces la nominal).
@@ -171,7 +208,7 @@ fault_rules:
     window:
       start: "09:00"
       end: "15:00"
-    min_consecutive_readings: 1
+    min_consecutive_readings: 3 # 15 min: a single rejected reading is not an outage
     severity: warning
 
 sites:
@@ -193,3 +230,21 @@ sla:
     schedule_cron: "0 0 * * *" # daily at midnight, local time
     timezone: America/Bogota
     max_delay_minutes: 60
+
+changelog:
+  - version: 1.1.0
+    date: "2026-10-08"
+    changes:
+      - Sección grid (columna ts, tolerancia de 60 s) para ajustar lecturas a intervalos de 5 minutos.
+      - Reglas nuevas off_grid (reject) y snapped_to_grid (flag).
+      - Reglas nuevas invalid_format, unknown_device y missing_key (reject) para que un valor
+        ilegible, un dispositivo desconocido o una clave vacía no detengan la carga.
+      - missing_daytime_reading exige 3 lecturas seguidas (15 minutos) antes de abrir un evento.
+    compatibility: >-
+      Versión menor: la fuente no cambia; cambian los resultados de la validación (más filas
+      pueden rechazarse o marcarse).
+  - version: 1.0.0
+    date: "2026-10-08"
+    changes:
+      - Primera versión del contrato.
+    compatibility: Versión inicial.

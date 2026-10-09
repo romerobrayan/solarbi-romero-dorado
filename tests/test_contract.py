@@ -53,7 +53,7 @@ def _rule(data: dict[str, Any], rule_id: str) -> dict[str, Any]:
 def test_real_contract_loads_with_expected_values() -> None:
     contract = load_contract(CONTRACT_PATH)
 
-    assert contract.version == "1.0.0"
+    assert contract.version == "1.1.0"
     assert contract.major_version == 1
     assert contract.timezone.key == "America/Bogota"
     assert contract.frequency_seconds == 300
@@ -61,6 +61,8 @@ def test_real_contract_loads_with_expected_values() -> None:
     assert contract.interval_hours == pytest.approx(5 / 60)
     assert contract.natural_key == ("dispositivo_id", "ts")
     assert contract.source_columns == tuple(SOURCE_HEADER)
+    assert (contract.grid.column, contract.grid.tolerance_seconds) == ("ts", 60)
+    assert [entry.version for entry in contract.changelog] == ["1.1.0", "1.0.0"]
 
 
 def test_real_contract_rule_actions() -> None:
@@ -68,6 +70,11 @@ def test_real_contract_rule_actions() -> None:
 
     actions = {rule.id: rule.action for rule in contract.quality_rules}
     assert actions == {
+        "missing_key": "reject",
+        "invalid_format": "reject",
+        "unknown_device": "reject",
+        "off_grid": "reject",
+        "snapped_to_grid": "flag",
         "range_p_ac_kw": "reject",
         "missing_p_ac_kw": "reject",
         "missing_irradiancia": "flag",
@@ -115,9 +122,10 @@ def test_unknown_action_fails(contract_data: dict[str, Any], tmp_path: Path) -> 
     def unknown_action(data: dict[str, Any]) -> None:
         _rule(data, "missing_irradiancia")["action"] = "drop"
 
+    index = [r["id"] for r in contract_data["quality_rules"]].index("missing_irradiancia")
     error = _broken(contract_data, tmp_path, unknown_action)
     assert any(
-        p.startswith("quality_rules[2].action:") and "'drop' is not one of" in p
+        p.startswith(f"quality_rules[{index}].action:") and "'drop' is not one of" in p
         for p in error.problems
     )
 
@@ -181,9 +189,61 @@ def test_device_with_unknown_site_fails(contract_data: dict[str, Any], tmp_path:
     assert any("sitio_id 'XX-99' is not declared in sites" in p for p in error.problems)
 
 
+def test_grid_tolerance_must_be_below_half_the_frequency(
+    contract_data: dict[str, Any], tmp_path: Path
+) -> None:
+    def wide_tolerance(data: dict[str, Any]) -> None:
+        data["grid"]["tolerance_seconds"] = 150
+
+    error = _broken(contract_data, tmp_path, wide_tolerance)
+    assert any("grid.tolerance_seconds: 150 must be less than half" in p for p in error.problems)
+
+
+def test_grid_column_must_be_a_timestamp(contract_data: dict[str, Any], tmp_path: Path) -> None:
+    def wrong_column(data: dict[str, Any]) -> None:
+        data["grid"]["column"] = "p_ac_kw"
+
+    error = _broken(contract_data, tmp_path, wrong_column)
+    assert "grid.column: 'p_ac_kw' must be a declared timestamp column" in error.problems
+
+
+def test_device_check_only_on_the_device_column(
+    contract_data: dict[str, Any], tmp_path: Path
+) -> None:
+    def device_check_on_power(data: dict[str, Any]) -> None:
+        _rule(data, "unknown_device")["columns"] = ["p_ac_kw"]
+
+    error = _broken(contract_data, tmp_path, device_check_on_power)
+    assert any("'known_device' applies only to [dispositivo_id]" in p for p in error.problems)
+
+
+def test_changelog_must_record_the_current_version(
+    contract_data: dict[str, Any], tmp_path: Path
+) -> None:
+    def unrecorded(data: dict[str, Any]) -> None:
+        data["contract_version"] = "1.2.0"
+
+    error = _broken(contract_data, tmp_path, unrecorded)
+    assert any(
+        "the first entry is 1.1.0, but contract_version is 1.2.0" in p for p in error.problems
+    )
+
+
+def test_non_nullable_column_needs_a_reject_rule(
+    contract_data: dict[str, Any], tmp_path: Path
+) -> None:
+    def unguarded(data: dict[str, Any]) -> None:
+        data["quality_rules"] = [r for r in data["quality_rules"] if r["id"] != "missing_key"]
+
+    error = _broken(contract_data, tmp_path, unguarded)
+    assert "columns: non-nullable column 'ts' needs a not_null rule with action reject" in (
+        error.problems
+    )
+
+
 def test_all_problems_are_reported_together(contract_data: dict[str, Any], tmp_path: Path) -> None:
     def several(data: dict[str, Any]) -> None:
-        data["source"]["frequency_seconds"] = 7
+        data["sla"]["freshness"]["timezone"] = "Mars/Base"
         data["devices"][0]["sitio_id"] = "XX-99"
 
     error = _broken(contract_data, tmp_path, several)
