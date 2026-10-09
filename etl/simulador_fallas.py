@@ -46,6 +46,16 @@ class SimulationConfig:
     inject_faults: bool = False
 
 
+def reading(ts: datetime, device: int, rng: random.Random) -> tuple[list[object], float]:
+    """One healthy reading (same physics as the professor's simulator) and the random
+    draw that decides its anomaly. Also used by scripts/replay_live.py."""
+    sol = max(0.0, math.sin(math.pi * (ts.hour + ts.minute / 60 - 6) / 12))
+    irr = round(1000 * sol * rng.uniform(0.7, 1.0), 1)
+    p_ac = round(NOMINAL_KWP * irr / 1000 * rng.uniform(0.80, 0.90), 3)
+    row: list[object] = [ts.isoformat(sep=" "), device, p_ac, irr, round(22 + 30 * sol, 1)]
+    return row, rng.random()
+
+
 def generate_rows(config: SimulationConfig) -> list[list[object]]:
     """All data rows (without header), in time order, device by device per timestamp."""
     rng = random.Random(config.seed)
@@ -65,11 +75,8 @@ def generate_rows(config: SimulationConfig) -> list[list[object]]:
                 and day_index == config.days - 1
                 and _within(ts, GAP_START, GAP_END)
             )
-            sol = max(0.0, math.sin(math.pi * (ts.hour + ts.minute / 60 - 6) / 12))
-            irr = round(1000 * sol * rng.uniform(0.7, 1.0), 1)
-            p_ac = round(NOMINAL_KWP * irr / 1000 * rng.uniform(0.80, 0.90), 3)
-            row: list[object] = [ts.isoformat(sep=" "), device, p_ac, irr, round(22 + 30 * sol, 1)]
-            r = rng.random()  # always drawn, so faults do not shift the random sequence
+            # r is always drawn, so faults do not shift the random sequence
+            row, r = reading(ts, device, rng)
             if in_gap:
                 continue  # the inverter or its link stopped reporting
             if in_trip:
