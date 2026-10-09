@@ -18,9 +18,9 @@ focus: **operational monitoring — power over time and fault detection**.
 | 0 | Foundations: repo, local infra, conventions | done |
 | 1 | Architecture & data contract | done |
 | 2 | ETL (Bronze -> Silver -> Gold) with quality rules | done |
-| 3 | Dashboards (Grafana + Power BI) | **next** |
-| 4 | Research | pending |
-| 5 | Delivery | pending |
+| 3 | Dashboards (Grafana + Power BI) | done (pending Brayan's Power BI steps in Desktop + screenshots) |
+| 4 | Research (Part A, written outside this repo) | in progress |
+| 5 | Delivery (PDF + repo) | **next** |
 | 6 | Scale to the real 4M+ row dataset (unknown schema) | pending |
 | 7 | Final dashboard / star schema | pending |
 
@@ -51,6 +51,17 @@ Medallion, single PostgreSQL 16 + TimescaleDB database (`docker-compose.yml`, se
 - **Roles**: `etl_writer` (non-superuser, owns all tables, used by the ETL), owner (migrations only),
   `grafana_reader` / `powerbi_reader` read-only through `bi_readonly` (`silver`, `dwh`, `dq`;
   never `bronze`).
+
+- **Grafana** (ADR 0008): dashboard `grafana/dashboards/solarbi-operacion.json` (provisioned,
+  UI edits allowed, then `scripts/export_grafana.py` writes it back normalized). Alerting in
+  `grafana/provisioning/alerting/`: rule `Potencia cero en horario solar` on Silver (thresholds must
+  match the contract; tests compare them), webhook contact point to the `alert-receiver` service
+  (compose profile `alerting`), email contact point for production. Rule files are NOT
+  env-interpolated by Grafana: write `$__timeFilter` / `{{ $labels.x }}` literally (never `$$`);
+  contact-point files are (`${VAR}`).
+- **Power BI** (ADR 0008): Import mode, `powerbi_reader`, Gold only. Brayan saves
+  `powerbi/SolarBI.pbip` from Desktop (`docs/powerbi.md`); `scripts/powerbi_model.py --apply` adds
+  relationships, date table and the `_Medidas` DAX in TMDL (Desktop must be closed).
 
 Diagrams: `docs/architecture.md`. Decisions: `docs/adr/` (template `0000-template.md`).
 
@@ -91,6 +102,10 @@ python etl/simulador.py                # professor's simulator -> data/bronze/te
 python etl/simulador_fallas.py --seed 42 --inject-faults   # -> data/samples/
 python -m etl.run_etl --file data/bronze/telemetria.csv     # the ETL (re-run = idempotent)
 python scripts/conteos.py              # row counts per layer + energy per day
+docker compose --profile alerting up -d                     # + webhook receiver for alerts
+python scripts/replay_live.py --trip-in 5m --trip-minutes 20   # live alert demo, run 09:00-15:00 local
+python scripts/export_grafana.py       # dashboard JSON from Grafana into the repo (--check compares)
+python scripts/powerbi_model.py --apply   # TMDL relationships + measures, after the .pbip is saved
 pytest                                 # DB tests skip if the stack is down (fail if SOLARBI_REQUIRE_DB=1)
 ruff check .
 docker compose down                    # stop; add -v to wipe volumes and re-run sql/init

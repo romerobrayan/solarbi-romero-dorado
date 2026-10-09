@@ -123,14 +123,66 @@ infraestructura → migrar → simular → ejecutar el ETL → ejecutarlo otra v
    Las pruebas de integración crean una base temporal `solarbi_test` en el mismo servidor y la
    borran al terminar, así que nunca tocan los datos de desarrollo.
 
-9. **Abrir Grafana** en <http://localhost:3000> (o el `GRAFANA_PORT` elegido) con el usuario y la
-   contraseña de administrador definidos en `.env`. El datasource *SolarBI PostgreSQL* ya viene
-   configurado.
+9. **Ver los tableros (Pasos 4 y 5):** Grafana y Power BI, en la sección siguiente.
 
 Para detener todo: `docker compose down`. Para borrar también los datos y empezar desde cero:
 `docker compose down -v` (en el siguiente arranque se vuelven a ejecutar `sql/init/` y, con
 `python scripts/migrate.py`, todas las migraciones). Nunca hace falta borrar el volumen para
 agregar tablas: los cambios de esquema llegan como migraciones nuevas.
+
+## Tableros: Grafana y Power BI
+
+Los mismos datos, dos vistas ([ADR 0008](docs/adr/0008-dashboards-grafana-import-powerbi.md)):
+Grafana para el operador (lecturas de 5 minutos, alertas, calidad) y Power BI para la gerencia
+(modelo estrella de Gold). Ambos se conectan con usuarios de solo lectura.
+
+### Grafana
+
+1. Levantar la pila con el receptor de notificaciones:
+
+   ```powershell
+   docker compose --profile alerting up -d
+   ```
+
+2. Abrir <http://localhost:3000> (o el `GRAFANA_PORT` elegido) con el usuario y la contraseña de
+   administrador de `.env`. En **Dashboards → SolarBI** está **SolarBI · Operación de la planta**:
+   potencia cada 5 minutos con irradiancia, umbral de 0,01 kW, franja 09:00–15:00 y eventos de falla
+   como anotaciones; potencia promedio por hora; energía del día elegido en la variable `Día (Gold)`;
+   eventos de falla; últimas corridas del ETL y filas afectadas por regla.
+3. La regla **Potencia cero en horario solar** está en **Alerting → Alert rules**. Qué hacer cuando
+   se dispara: [docs/operacion.md](docs/operacion.md#alerta-potencia-cero).
+
+**Ver la alerta en vivo.** Los datos simulados son de días pasados, y una regla de alerta mira los
+últimos minutos. Este script simula el envío IoT (no hay un inversor real): carga las lecturas de
+hoy hasta ahora y luego una lectura cada 5 minutos por el ETL normal, con un disparo del inversor
+unos minutos después. **Ejecútelo entre las 09:00 y las 15:00 hora de Colombia**; fuera de ese
+horario la alerta sigue en Normal, como debe ser.
+
+```powershell
+python scripts/replay_live.py --trip-in 5m --trip-minutes 20
+```
+
+Cada línea muestra la lectura, el resultado del ETL y el estado de la alerta: Normal → Pending →
+Firing (unos 10 minutos después del disparo) → Normal (cuando vuelve la potencia). La notificación
+entregada se ve con:
+
+```powershell
+docker compose --profile alerting logs alert-receiver
+```
+
+**Exportar el tablero.** Se puede editar en la interfaz de Grafana; después, este script escribe el
+JSON normalizado en `grafana/dashboards/` para versionarlo (con `--check` solo compara):
+
+```powershell
+python scripts/export_grafana.py
+```
+
+### Power BI
+
+El proyecto `powerbi/SolarBI.pbip` se crea en Power BI Desktop siguiendo
+[docs/powerbi.md](docs/powerbi.md): conexión en modo Importar a `127.0.0.1:5433` con
+`powerbi_reader`, las cuatro tablas de `dwh`, y luego `python scripts/powerbi_model.py --apply`
+agrega relaciones, tabla de fechas y medidas DAX al modelo (TMDL).
 
 ## Programación diaria
 
@@ -214,12 +266,12 @@ instalado en el equipo. Si el puerto 5433 o 3000 ya está ocupado, basta con cam
 | `data/samples/` | Muestras pequeñas versionadas (`telemetria_fallas_seed42.csv`) |
 | `docs/` | Enunciado (PDF), arquitectura, ADRs, operación (`operacion.md`) y evidencias (`evidencias/`) |
 | `etl/` | `run_etl.py` (punto de entrada), `pipeline.py`, `bronze.py`, `sqlgen.py` (SQL generado desde el contrato), `contract.py`, `migrations.py`, `config.py`, `simulador.py` (del docente) y `simulador_fallas.py` |
-| `scripts/` | `migrate.py` aplica las migraciones; `check_env.py` verifica el entorno; `conteos.py` muestra conteos por capa |
+| `scripts/` | `migrate.py`, `check_env.py`, `conteos.py`; `replay_live.py` (alerta en vivo), `export_grafana.py` (tablero a JSON), `powerbi_model.py` (medidas DAX en TMDL) |
 | `sql/init/` | Arranque de la base de datos: extensión, esquemas y roles de lectura |
 | `sql/migrations/` | Migraciones numeradas que crean las tablas (solo hacia adelante) |
-| `grafana/provisioning/` | Datasource y proveedor de dashboards (configuración como código) |
+| `grafana/provisioning/` | Datasource, proveedor de dashboards y alertas (regla, contact points, política), como código |
 | `grafana/dashboards/` | JSON exportado de los dashboards (fuente de verdad) |
-| `powerbi/` | Proyecto de Power BI en formato `.pbip` |
+| `powerbi/` | Proyecto de Power BI en formato `.pbip` (guía en `docs/powerbi.md`) |
 | `tests/` | Pruebas automáticas (pytest) y archivos de prueba (`tests/fixtures/`) |
 | `.github/workflows/ci.yml` | Integración continua: ruff y pytest con TimescaleDB, en Python 3.12 y 3.14 |
 
@@ -230,8 +282,8 @@ instalado en el equipo. Si el puerto 5433 o 3000 ya está ocupado, basta con cam
 | 0 | Fundamentos: repositorio, infraestructura local y convenciones | ✅ Completada |
 | 1 | Arquitectura y contrato de datos | ✅ Completada |
 | 2 | ETL (Bronze → Silver → Gold) con reglas de calidad | ✅ Completada |
-| 3 | Dashboards (Grafana y Power BI) | ⏳ Siguiente |
-| 4 | Investigación | Pendiente |
+| 3 | Dashboards (Grafana y Power BI) | ✅ Grafana completo; Power BI pendiente de los pasos en Desktop |
+| 4 | Investigación (Parte A, fuera del repositorio) | ⏳ En curso |
 | 5 | Entrega | Pendiente |
 | 6 | Escalamiento al dataset real (4M+ filas) | Pendiente |
 | 7 | Dashboard final y modelo estrella | Pendiente |
