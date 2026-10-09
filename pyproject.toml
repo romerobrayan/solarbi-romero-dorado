@@ -10,7 +10,6 @@ requires-python = ">=3.12"
 authors = [{ name = "Brayan Romero Dorado" }]
 dependencies = [
     "jsonschema==4.26.0",
-    "pandas==3.0.6",
     "psycopg[binary]==3.3.6",
     "python-dotenv==1.2.4",
     "pyyaml==6.0.3",
@@ -32,6 +31,13 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "N", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# The professor's simulator is kept verbatim (one-line imports, aligned comments).
+"etl/simulador.py" = ["E401", "I001"]
+
+[tool.ruff.format]
+exclude = ["etl/simulador.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
