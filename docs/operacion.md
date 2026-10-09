@@ -91,8 +91,33 @@ Qué revisa el operador cuando llega:
 5. La alerta se resuelve sola cuando llega una lectura con potencia; Grafana envía el aviso de
    resolución por el mismo canal.
 
-Para practicar sin un inversor real, `python scripts/replay_live.py` simula un disparo en vivo
-(ver README); debe ejecutarse entre las 09:00 y las 15:00.
+Para practicar sin un inversor real, `python scripts/replay_live.py --trip-in 5m` simula un disparo
+en vivo (ver README); debe ejecutarse entre las 09:00 y las 15:00.
+
+## Alerta: inversor sin datos
+
+La regla **Inversor sin datos en horario solar** (carpeta SolarBI, severidad `warning`) parte del
+catálogo de dispositivos (`dwh.dim_dispositivo`), no de las lecturas: se dispara para cada inversor
+que no envió **ninguna** lectura en los últimos 15 minutos (3 lecturas esperadas, el mismo umbral de
+la regla de calidad `missing_daytime_reading`) mientras la hora del sitio está entre las 09:00 y las
+15:00. La regla de potencia cero no puede ver este caso: sin filas no hay nada que comparar. La
+notificación va al correo del operador (ruta por defecto); se resuelve sola cuando vuelve a llegar
+una lectura.
+
+Qué revisa el operador:
+
+1. **Tablero**, panel de potencia: ¿la serie del inversor se corta (hueco) o llega en cero? Un hueco
+   es este caso; una línea en cero es la alerta de potencia cero.
+2. **¿Es un solo inversor o todos?** Si todos dejaron de reportar a la vez, el problema suele ser el
+   gateway, la red del sitio o la carga del ETL, no los inversores. Revisar también la tabla de
+   calidad del ETL (¿hubo corridas en los últimos minutos?).
+3. **En sitio**: alimentación y luces del inversor, el datalogger o gateway y su conexión (cable,
+   router, SIM).
+4. Cuando los datos vuelven, el ETL registra el hueco como evento `missing_daytime_reading` en la
+   tabla **Eventos de falla** (con su inicio, fin y número de lecturas faltantes).
+
+Para practicar: `python scripts/replay_live.py --gap-in 5m --gap-minutes 20` deja de enviar
+lecturas durante 20 minutos (ver README); también entre las 09:00 y las 15:00.
 
 ## Purgar días cargados por error
 

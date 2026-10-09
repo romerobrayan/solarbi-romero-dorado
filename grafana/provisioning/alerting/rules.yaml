@@ -1,9 +1,13 @@
-# Alert rule provisioned as code. Unlike contact points, Grafana does NOT expand
+# Alert rules provisioned as code. Unlike contact points, Grafana does NOT expand
 # environment variables in rule files: "$__timeFilter" and "{{ $labels.x }}" are
 # written as-is (a doubled-dollar escape would be stored literally and break the query).
 #
-# Values that must match contracts/telemetria.yaml (fault rule zero_power_daylight
-# and the site's time zone) are checked by tests/test_grafana.py.
+# Two rules split the daylight faults of an inverter (ADR 0008):
+# - "Potencia cero" looks at the readings that DID arrive: the latest one is a zero.
+# - "Sin datos" starts from the device catalog: a device sent NO reading at all, which
+#   the first rule cannot see (no rows = no data, and no rows at night is normal).
+# Values that must match contracts/telemetria.yaml (fault rules zero_power_daylight and
+# missing_daytime_reading, the site's time zone) are checked by tests/test_grafana.py.
 apiVersion: 1
 
 groups:
@@ -55,8 +59,8 @@ groups:
                 - evaluator:
                     type: gt
                     params: [0]
-        # No reading in the last 15 minutes is not this rule's business
-        # (missing data is the missing_daytime_reading fault rule).
+        # No reading in the last 15 minutes is not this rule's business: at night there
+        # are no rows on purpose. A silent device is the "sin datos" rule below.
         noDataState: OK
         execErrState: Error
         # 10 minutes = two more 5-minute readings still at zero: one bad reading
@@ -73,4 +77,71 @@ groups:
             está entre las 09:00 y las 15:00 hora de Colombia y se mantuvo así al menos
             10 minutos. Posible disparo del inversor o falla de conexión AC.
           runbook_url: https://github.com/romerobrayan/solarbi-romero-dorado/blob/main/docs/operacion.md#alerta-potencia-cero
+        isPaused: false
+
+      - uid: solarbi-sin-datos
+        title: Inversor sin datos en horario solar
+        condition: C
+        data:
+          # A: one row per device of the catalog (dwh.dim_dispositivo), whether or not it
+          # sent anything: 1 when the evaluation time is inside 09:00-15:00 at the site
+          # and the device has no reading in the last 15 minutes (3 expected readings,
+          # the contract's min_consecutive_readings), else 0.
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: solarbi-postgres
+            model:
+              refId: A
+              datasource:
+                type: grafana-postgresql-datasource
+                uid: solarbi-postgres
+              editorMode: code
+              format: table
+              rawQuery: true
+              rawSql: |
+                SELECT d.dispositivo_id AS dispositivo,
+                       CASE WHEN ($__timeTo()::timestamptz AT TIME ZONE s.zona_horaria)::time >= TIME '09:00'
+                             AND ($__timeTo()::timestamptz AT TIME ZONE s.zona_horaria)::time <  TIME '15:00'
+                             AND count(l.ts) = 0
+                            THEN 1 ELSE 0 END AS sin_datos
+                FROM dwh.dim_dispositivo AS d
+                JOIN dwh.dim_sitio AS s USING (sitio_key)
+                LEFT JOIN silver.lectura_5min AS l
+                       ON l.dispositivo_id = d.dispositivo_id
+                      AND $__timeFilter(l.ts)
+                GROUP BY d.dispositivo_id, s.zona_horaria
+          # C: fire for every device that is silent during solar hours.
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              datasource:
+                type: __expr__
+                uid: __expr__
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        # The query returns one row per catalog device, so "no data" means an empty or
+        # unreadable catalog: show it as NoData instead of hiding it.
+        noDataState: NoData
+        execErrState: Error
+        # The 15-minute window already is the persistence condition (3 missing readings):
+        # no extra pending period.
+        for: 0s
+        dashboardUid: solarbi-operacion
+        panelId: 1
+        labels:
+          severity: warning
+        annotations:
+          summary: "Inversor {{ $labels.dispositivo }} sin datos en horario solar"
+          description: >-
+            El inversor {{ $labels.dispositivo }} no envió ninguna lectura en los últimos
+            15 minutos (3 lecturas esperadas) entre las 09:00 y las 15:00 hora del sitio.
+            Posible caída del inversor, del gateway o de la comunicación.
+          runbook_url: https://github.com/romerobrayan/solarbi-romero-dorado/blob/main/docs/operacion.md#alerta-inversor-sin-datos
         isPaused: false

@@ -33,9 +33,19 @@ def dashboard() -> dict[str, Any]:
 
 
 @pytest.fixture(scope="module")
-def rule() -> dict[str, Any]:
+def rules() -> dict[str, dict[str, Any]]:
     groups = yaml.safe_load((ALERTING / "rules.yaml").read_text(encoding="utf-8"))["groups"]
-    return groups[0]["rules"][0]
+    return {r["uid"]: r for group in groups for r in group["rules"]}
+
+
+@pytest.fixture(scope="module")
+def rule(rules: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    return rules["solarbi-potencia-cero"]
+
+
+@pytest.fixture(scope="module")
+def silent_rule(rules: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    return rules["solarbi-sin-datos"]
 
 
 def _panel(dashboard: dict[str, Any], panel_id: int) -> dict[str, Any]:
@@ -71,7 +81,7 @@ def test_committed_dashboard_is_normalized(dashboard: dict[str, Any]) -> None:
 
 def test_dashboard_settings(dashboard: dict[str, Any]) -> None:
     assert dashboard["timezone"] == "America/Bogota"
-    assert dashboard["time"] == {"from": "now-3d", "to": "now"}
+    assert dashboard["time"] == {"from": "now-7d", "to": "now"}  # no future data on screen
     assert dashboard["refresh"] == "30s"
     variables = {v["name"]: v for v in dashboard["templating"]["list"]}
     assert set(variables) == {"dispositivo", "dia"}
@@ -151,25 +161,64 @@ def test_alert_rule_matches_the_contract(rule: dict[str, Any], contract: Contrac
     assert "$$" not in yaml.safe_dump(rule)  # rule files are not env-interpolated by Grafana
 
 
-def test_alert_rule_settings(rule: dict[str, Any]) -> None:
+def test_alert_rule_settings(rule: dict[str, Any], contract: Contract) -> None:
+    zero_power = next(r for r in contract.fault_rules if r.id == "zero_power_daylight")
     assert rule["title"] == "Potencia cero en horario solar"
     assert rule["for"] == "10m"
-    assert rule["labels"] == {"severity": "critical"}
+    assert rule["labels"] == {"severity": zero_power.severity}
     assert rule["data"][0]["relativeTimeRange"] == {"from": 900, "to": 0}
     assert rule["data"][0]["datasourceUid"] == DATASOURCE_UID
     assert rule["noDataState"] == "OK"
     assert "{{ $labels.dispositivo }}" in rule["annotations"]["summary"]
 
 
-def test_runbook_link_points_to_an_existing_section(rule: dict[str, Any]) -> None:
-    url = rule["annotations"]["runbook_url"]
-    doc, _, anchor = url.partition("blob/main/")[2].partition("#")
-    headings = [
-        line.lstrip("#").strip()
-        for line in (PROJECT_ROOT / doc).read_text(encoding="utf-8").splitlines()
-        if line.startswith("#")
-    ]
-    assert anchor in {_anchor(h) for h in headings}
+def test_silent_device_rule_matches_the_contract(
+    silent_rule: dict[str, Any], contract: Contract
+) -> None:
+    """Same drift test as the zero-power rule, against missing_daytime_reading."""
+    missing = next(r for r in contract.fault_rules if r.id == "missing_daytime_reading")
+    sql = silent_rule["data"][0]["model"]["rawSql"]
+    local_now = "($__timeTo()::timestamptz AT TIME ZONE s.zona_horaria)::time"
+    assert f"{local_now} >= TIME '{missing.window.start:%H:%M}'" in sql
+    assert f"{local_now} <  TIME '{missing.window.end:%H:%M}'" in sql
+    # 15 minutes = the contract's outage: min_consecutive_readings missing 5-minute readings
+    window = silent_rule["data"][0]["relativeTimeRange"]
+    assert window == {
+        "from": missing.min_consecutive_readings * contract.frequency_seconds,
+        "to": 0,
+    }
+    assert silent_rule["labels"] == {"severity": missing.severity}
+    assert "$$" not in yaml.safe_dump(silent_rule)
+
+
+def test_silent_device_rule_starts_from_the_catalog(silent_rule: dict[str, Any]) -> None:
+    """A device that sends nothing has no rows in Silver: the rule must list it anyway."""
+    sql = silent_rule["data"][0]["model"]["rawSql"]
+    assert "FROM dwh.dim_dispositivo AS d" in sql
+    assert "LEFT JOIN silver.lectura_5min AS l" in sql and "$__timeFilter(l.ts)" in sql
+    assert "count(l.ts) = 0" in sql
+    assert silent_rule["title"] == "Inversor sin datos en horario solar"
+    assert silent_rule["noDataState"] != "OK"  # one row per device: no rows is a problem
+    assert "{{ $labels.dispositivo }}" in silent_rule["annotations"]["summary"]
+
+
+def test_every_rule_links_to_the_power_panel(rules: dict[str, dict[str, Any]]) -> None:
+    assert len(rules) == 2
+    for rule in rules.values():
+        assert (rule["dashboardUid"], rule["panelId"]) == ("solarbi-operacion", 1)
+        assert rule["data"][0]["datasourceUid"] == DATASOURCE_UID
+
+
+def test_runbook_links_point_to_existing_sections(rules: dict[str, dict[str, Any]]) -> None:
+    for rule in rules.values():
+        url = rule["annotations"]["runbook_url"]
+        doc, _, anchor = url.partition("blob/main/")[2].partition("#")
+        headings = [
+            line.lstrip("#").strip()
+            for line in (PROJECT_ROOT / doc).read_text(encoding="utf-8").splitlines()
+            if line.startswith("#")
+        ]
+        assert anchor in {_anchor(h) for h in headings}, url
 
 
 def test_contact_points_and_policy() -> None:
@@ -186,6 +235,9 @@ def test_contact_points_and_policy() -> None:
     assert critical["object_matchers"] == [["severity", "=", "critical"]]
     assert "dispositivo" in critical["group_by"]
     assert critical["repeat_interval"] == "1h"
+    # warnings (silent device) match no route: they go to the default receiver, email only
+    assert policy["receiver"] == "correo-operador"
+    assert not any(["severity", "=", "warning"] in r["object_matchers"] for r in policy["routes"])
 
 
 def test_alerting_files_hold_no_secrets() -> None:

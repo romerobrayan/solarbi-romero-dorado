@@ -650,7 +650,7 @@
     ]
   },
   "time": {
-    "from": "now-3d",
+    "from": "now-7d",
     "to": "now"
   },
   "timezone": "America/Bogota",
