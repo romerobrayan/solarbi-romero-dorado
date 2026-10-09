@@ -182,13 +182,14 @@ def test_missing_daytime_readings_become_events(
                ORDER BY ts_inicio"""
         ).fetchall()
     # Gaps of at least 3 slots inside 09:00-15:00 local; the 2-slot gap at 10:10 is ignored.
+    # Jan 16 has no event: its only reading is 00:00, so nothing later can be "missing" yet
+    # (the same rule keeps a live feed from flagging the rest of today as missing).
     assert [(rule, start.isoformat(), n) for rule, start, n in events] == [
         ("missing_daytime_reading", "09:00:00", 12),
         ("missing_daytime_reading", "10:40:00", 4),
         ("missing_daytime_reading", "11:05:00", 47),
-        ("missing_daytime_reading", "09:00:00", 72),
     ]
-    assert anomalies.eventos_falla == 4
+    assert anomalies.eventos_falla == 3
 
 
 # --- fault injection ----------------------------------------------------------------

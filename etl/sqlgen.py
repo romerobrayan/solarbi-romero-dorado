@@ -602,15 +602,23 @@ def fault_rule_sql(contract: Contract, rule: FaultRule) -> sql.Composed:
             conditions=sql.SQL(" AND ").join(conditions),
         )
     elif rule.check == "missing_in_window":
+        # A slot can only be missing if a later reading of that day already arrived:
+        # data after the last reading has not been sent yet (live feed, partial file).
+        # Bounded by data, not by the clock, so re-running a load stays deterministic.
         readings = sql.SQL(
             """SELECT dd.dispositivo_id, g.ts
     FROM {days} AS dd
+    CROSS JOIN LATERAL (
+        SELECT max(l.ts) AS ultima FROM {silver} AS l
+        WHERE l.{device} = dd.dispositivo_id AND l.ts >= dd.dia_inicio AND l.ts < dd.dia_fin
+    ) AS u
     CROSS JOIN LATERAL generate_series(
         (dd.fecha + {start})::timestamp AT TIME ZONE dd.zona,
         (dd.fecha + {end})::timestamp AT TIME ZONE dd.zona - {step},
         {step}
     ) AS g (ts)
-    WHERE NOT EXISTS (
+    WHERE g.ts < u.ultima
+      AND NOT EXISTS (
         SELECT 1 FROM {silver} AS l WHERE l.{device} = dd.dispositivo_id AND l.ts = g.ts
     )"""
         ).format(
