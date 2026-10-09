@@ -118,6 +118,34 @@ def test_apply_is_idempotent_and_keeps_auto_detected_relationships(tmp_path: Pat
     assert relationships.count("toColumn: 'dwh dim_fecha'.fecha_key") == 1
 
 
+def test_apply_turns_auto_detected_one_to_one_into_many_to_one(tmp_path: Path) -> None:
+    model = _project(tmp_path)
+    relationships_path = model / "definition" / "relationships.tmdl"
+    local_date = (
+        "relationship ld\n\tjoinOnDateBehavior: datePartOnly\n"
+        "\tcrossFilteringBehavior: bothDirections\n"
+        "\tfromColumn: 'dwh dim_fecha'.fecha\n\ttoColumn: LocalDateTable_x.Date\n\n"
+    )
+    relationships_path.write_text(
+        local_date + "relationship AutoDetected_abc\n\tfromCardinality: one\n"
+        "\tcrossFilteringBehavior: bothDirections\n"
+        "\tfromColumn: 'dwh fact_energia_dia'.fecha_key\n\ttoColumn: 'dwh dim_fecha'.fecha_key\n",
+        encoding="utf-8",
+    )
+
+    changes = apply(model)
+    text = relationships_path.read_text(encoding="utf-8")
+
+    assert "relationships: star relationships set to many-to-one, single direction" in changes
+    assert "fromCardinality" not in text
+    assert text.count("crossFilteringBehavior: bothDirections") == 1  # LocalDateTable untouched
+    assert text.startswith(local_date)
+    assert "relationship AutoDetected_abc\n\tfromColumn: 'dwh fact_energia_dia'.fecha_key\n" in text
+    assert text.count("toColumn: 'dwh dim_fecha'.fecha_key") == 1
+    assert apply(model) == []
+    assert relationships_path.read_text(encoding="utf-8") == text
+
+
 def test_mark_date_table_requires_the_fecha_column() -> None:
     with pytest.raises(ModelError, match="fecha"):
         mark_date_table("table dim_fecha\n\tcolumn otra\n\t\tdataType: string\n")

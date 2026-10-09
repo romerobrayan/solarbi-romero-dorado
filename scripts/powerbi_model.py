@@ -5,7 +5,8 @@ the four dwh tables and saves powerbi/SolarBI.pbip (TMDL format). With Desktop
 CLOSED, this script then edits the TMDL files to:
 
 - add the star-schema relationships (fact -> dim_fecha, fact -> dim_dispositivo,
-  dim_dispositivo -> dim_sitio), skipping any Power BI already auto-detected;
+  dim_dispositivo -> dim_sitio), skipping any Power BI already auto-detected, and
+  force all three to many-to-one with single-direction filtering;
 - mark dim_fecha as the date table (dataCategory: Time, fecha as key);
 - create the _Medidas table with the DAX measures, format strings and folders.
 
@@ -253,6 +254,11 @@ def mark_date_table(text: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _column_ref(line: str) -> tuple[str, str]:
+    key, value = line.strip().split(":", 1)
+    return key, value.strip().replace("'", "").replace('"', "")
+
+
 def existing_relationship_pairs(text: str) -> set[tuple[str, str]]:
     pairs, current = set(), {}
     for line in text.splitlines():
@@ -260,11 +266,37 @@ def existing_relationship_pairs(text: str) -> set[tuple[str, str]]:
         if stripped.startswith("relationship "):
             current = {}
         elif stripped.startswith(("fromColumn:", "toColumn:")):
-            key, value = stripped.split(":", 1)
-            current[key] = value.strip().replace("'", "").replace('"', "")
+            key, value = _column_ref(stripped)
+            current[key] = value
             if len(current) == 2:
                 pairs.add((current["fromColumn"], current["toColumn"]))
     return pairs
+
+
+# Properties Desktop writes when it auto-detects a star relationship as one-to-one and
+# bidirectional (with a single device every key looks unique). Without them TMDL falls
+# back to its defaults: many-to-one, single-direction filtering.
+NON_STAR_PROPERTIES = frozenset({"fromCardinality: one", "crossFilteringBehavior: bothDirections"})
+
+
+def enforce_many_to_one(text: str, star_pairs: set[tuple[str, str]]) -> str:
+    """Drop the one-to-one / bidirectional properties from the star relationships only."""
+    blocks: list[list[str]] = [[]]
+    for line in text.splitlines(keepends=True):
+        if line.startswith("relationship "):
+            blocks.append([])
+        blocks[-1].append(line)
+    out = []
+    for block in blocks:
+        refs = dict(
+            _column_ref(line)
+            for line in block
+            if line.strip().startswith(("fromColumn:", "toColumn:"))
+        )
+        if (refs.get("fromColumn"), refs.get("toColumn")) in star_pairs:
+            block = [line for line in block if line.strip() not in NON_STAR_PROPERTIES]
+        out += block
+    return "".join(out)
 
 
 def apply(model_dir: Path = SEMANTIC_MODEL) -> list[str]:
@@ -292,6 +324,10 @@ def apply(model_dir: Path = SEMANTIC_MODEL) -> list[str]:
     relationships_path = definition / "relationships.tmdl"
     current = relationships_path.read_text(encoding="utf-8") if relationships_path.exists() else ""
     present = existing_relationship_pairs(current)
+    star_pairs = {(f"{tables[r[0]]}.{r[1]}", f"{tables[r[2]]}.{r[3]}") for r in RELATIONSHIPS}
+    text = enforce_many_to_one(current, star_pairs)
+    if text != current:
+        changes.append("relationships: star relationships set to many-to-one, single direction")
     additions = []
     for rel in RELATIONSHIPS:
         pair = (f"{tables[rel[0]]}.{rel[1]}", f"{tables[rel[2]]}.{rel[3]}")
@@ -299,7 +335,8 @@ def apply(model_dir: Path = SEMANTIC_MODEL) -> list[str]:
             additions.append(render_relationship(tables, rel))
             changes.append(f"relationship {pair[0]} -> {pair[1]}")
     if additions:
-        text = (current.rstrip("\n") + "\n\n" if current.strip() else "") + "\n".join(additions)
+        text = (text.rstrip("\n") + "\n\n" if text.strip() else "") + "\n".join(additions)
+    if text != current:
         relationships_path.write_text(text, encoding="utf-8", newline="\n")
 
     date_path = next(
