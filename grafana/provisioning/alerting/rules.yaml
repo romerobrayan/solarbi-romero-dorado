@@ -1,0 +1,76 @@
+# Alert rule provisioned as code. Unlike contact points, Grafana does NOT expand
+# environment variables in rule files: "$__timeFilter" and "{{ $labels.x }}" are
+# written as-is (a doubled-dollar escape would be stored literally and break the query).
+#
+# Values that must match contracts/telemetria.yaml (fault rule zero_power_daylight
+# and the site's time zone) are checked by tests/test_grafana.py.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: operacion
+    folder: SolarBI
+    interval: 1m
+    rules:
+      - uid: solarbi-potencia-cero
+        title: Potencia cero en horario solar
+        condition: C
+        data:
+          # A: the latest reading of each device in the last 15 minutes is 1 when it is
+          # a zero-power reading (p_ac_kw <= 0.01 kW) inside 09:00-15:00 local, else 0.
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: solarbi-postgres
+            model:
+              refId: A
+              datasource:
+                type: grafana-postgresql-datasource
+                uid: solarbi-postgres
+              editorMode: code
+              format: table
+              rawQuery: true
+              rawSql: |
+                SELECT DISTINCT ON (dispositivo_id)
+                       dispositivo_id AS dispositivo,
+                       CASE WHEN p_ac_kw <= 0.01
+                             AND (ts AT TIME ZONE 'America/Bogota')::time >= TIME '09:00'
+                             AND (ts AT TIME ZONE 'America/Bogota')::time <  TIME '15:00'
+                            THEN 1 ELSE 0 END AS potencia_cero
+                FROM silver.lectura_5min
+                WHERE $__timeFilter(ts)
+                ORDER BY dispositivo_id, ts DESC
+          # C: fire for every device whose latest reading is a daylight zero.
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              datasource:
+                type: __expr__
+                uid: __expr__
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        # No reading in the last 15 minutes is not this rule's business
+        # (missing data is the missing_daytime_reading fault rule).
+        noDataState: OK
+        execErrState: Error
+        # 10 minutes = two more 5-minute readings still at zero: one bad reading
+        # does not page the operator; a tripped inverter pages within ~10-15 min.
+        for: 10m
+        dashboardUid: solarbi-operacion
+        panelId: 1
+        labels:
+          severity: critical
+        annotations:
+          summary: "Inversor {{ $labels.dispositivo }} sin potencia en horario solar"
+          description: >-
+            La última lectura del inversor {{ $labels.dispositivo }} (p_ac_kw <= 0,01 kW)
+            está entre las 09:00 y las 15:00 hora de Colombia y se mantuvo así al menos
+            10 minutos. Posible disparo del inversor o falla de conexión AC.
+          runbook_url: https://github.com/romerobrayan/solarbi-romero-dorado/blob/main/docs/operacion.md#alerta-potencia-cero
+        isPaused: false

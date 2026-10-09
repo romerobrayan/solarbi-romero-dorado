@@ -67,6 +67,33 @@ La tarea usa la hora local del equipo (Colombia). Como `-m etl.run_etl` resuelve
 el paquete instalado y el contrato desde `CONTRACTS_DIR`, no depende del directorio de trabajo;
 `.env` se busca en la raíz del proyecto. Para quitarla: `schtasks /Delete /TN SolarBI_ETL /F`.
 
+## Alerta: potencia cero
+
+La regla de Grafana **Potencia cero en horario solar** (carpeta SolarBI) se dispara cuando la
+última lectura de un inversor tiene `p_ac_kw <= 0,01 kW` entre las 09:00 y las 15:00 hora de
+Colombia y sigue así durante 10 minutos (dos lecturas más de 5 minutos). La notificación llega por
+el *contact point* `webhook-local` (en producción sería el correo del operador) con la etiqueta
+`dispositivo`, y se repite cada hora mientras la falla siga.
+
+Qué revisa el operador cuando llega:
+
+1. **Tablero "SolarBI · Operación de la planta"**, panel de potencia: ¿la caída es de un solo
+   inversor o de todos? Si la irradiancia (eje derecho) también cayó a casi cero, es un cielo muy
+   nublado o un problema del sensor, no del inversor.
+2. **Tabla "Eventos de falla"**: el evento `zero_power_daylight` queda registrado con inicio, fin y
+   número de lecturas (también como anotación roja en el panel de potencia).
+3. **En sitio**: estado y código de error del inversor, interruptor AC, protecciones del tablero y
+   conexión a la red. Un disparo por sobretensión de red suele restablecerse solo; uno repetido se
+   escala a mantenimiento.
+4. **Si no hay lecturas en absoluto** (no cero, sino ausencia de datos), esta regla no aplica: es
+   la regla de calidad `missing_daytime_reading` (corte de comunicación) y se ve en la misma tabla
+   de eventos.
+5. La alerta se resuelve sola cuando llega una lectura con potencia; Grafana envía el aviso de
+   resolución por el mismo canal.
+
+Para practicar sin un inversor real, `python scripts/replay_live.py` simula un disparo en vivo
+(ver README); debe ejecutarse entre las 09:00 y las 15:00.
+
 ## Diagnóstico
 
 ```sql

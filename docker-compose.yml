@@ -51,9 +51,10 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
-      # Interpolated by Grafana inside grafana/provisioning/datasources/postgres.yaml.
+      # Interpolated by Grafana inside grafana/provisioning/ (datasource, contact points).
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
       GRAFANA_READER_PASSWORD: ${GRAFANA_READER_PASSWORD:?set GRAFANA_READER_PASSWORD in .env}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:?set ALERT_EMAIL_TO in .env}
     ports:
       - "127.0.0.1:${GRAFANA_PORT:?set GRAFANA_PORT in .env}:3000"
     volumes:
@@ -67,6 +68,19 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+    networks:
+      - solarbi
+
+  alert-receiver:
+    # Local stand-in for the operator's notification channel: it echoes every
+    # webhook Grafana sends, so "docker compose logs alert-receiver" shows the
+    # delivered alert payload. Only started with: docker compose --profile alerting up -d
+    image: mendhak/http-https-echo:42
+    profiles: ["alerting"]
+    restart: unless-stopped
+    environment:
+      HTTP_PORT: "8080"
+      LOG_IGNORE_PATH: /healthz
     networks:
       - solarbi
 

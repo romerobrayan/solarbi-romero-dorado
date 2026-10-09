@@ -1,0 +1,20 @@
+# Notification policy tree (replaces Grafana's default tree).
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: correo-operador
+    group_by: ["grafana_folder", "alertname"]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    routes:
+      # Critical plant alerts: one notification group per device; while the fault
+      # persists, remind the operator every hour (a trip costs energy every hour).
+      - receiver: webhook-local
+        object_matchers:
+          - ["severity", "=", "critical"]
+        group_by: ["alertname", "dispositivo"]
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 1h

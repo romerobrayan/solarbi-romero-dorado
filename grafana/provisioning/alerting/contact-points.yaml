@@ -1,0 +1,29 @@
+# Contact points provisioned as code. No secrets: values come from the
+# environment (${VAR}), set in docker-compose.yml from .env.
+apiVersion: 1
+
+contactPoints:
+  # Delivers for real in development: the alert-receiver service (compose profile
+  # "alerting") echoes the JSON payload to its log.
+  - orgId: 1
+    name: webhook-local
+    receivers:
+      - uid: solarbi-webhook-local
+        type: webhook
+        settings:
+          url: http://alert-receiver:8080/grafana/alertas
+          httpMethod: POST
+        disableResolveMessage: false
+
+  # How production would notify the plant operator. Provisioned but it only sends
+  # once Grafana has SMTP configured (GF_SMTP_*); no policy routes to it today
+  # except as the default for non-critical alerts.
+  - orgId: 1
+    name: correo-operador
+    receivers:
+      - uid: solarbi-correo-operador
+        type: email
+        settings:
+          addresses: ${ALERT_EMAIL_TO}
+          singleEmail: true
+        disableResolveMessage: false
