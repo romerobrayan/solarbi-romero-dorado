@@ -1,0 +1,26 @@
+model Model
+	culture: es-ES
+	defaultPowerBIDataSourceVersion: powerBI_V3
+	sourceQueryCulture: es-ES
+	valueFilterBehavior: independent
+	dataAccessOptions
+		legacyRedirects
+		returnErrorValuesAsNull
+
+annotation __PBI_TimeIntelligenceEnabled = 1
+
+annotation PBI_QueryOrder = ["dim_dispositivo","dim_fecha","dim_sitio","fact_energia_dia","_Medidas"]
+
+annotation PBI_ProTooling = ["DevMode"]
+
+ref table dim_dispositivo
+ref table dim_fecha
+ref table DateTableTemplate_393be1f9-9a03-4bb8-af17-b23bf9ede661
+ref table LocalDateTable_a98ad5ff-ca34-4c8a-8bec-a2ab93185cb0
+ref table dim_sitio
+ref table fact_energia_dia
+ref table LocalDateTable_cfb59114-6963-4095-90d9-3f2a555eeb23
+ref table _Medidas
+
+ref cultureInfo es-ES
+

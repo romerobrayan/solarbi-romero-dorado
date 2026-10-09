@@ -1,0 +1,57 @@
+table dim_sitio
+	lineageTag: b7af41cf-5192-40ab-b3ef-ec2bf9a258b1
+
+	column sitio_key
+		dataType: int64
+		formatString: 0
+		lineageTag: f2cb2fef-d6f2-4eff-adca-58d6272b4ad1
+		summarizeBy: sum
+		sourceColumn: sitio_key
+
+		annotation SummarizationSetBy = Automatic
+
+	column sitio_id
+		dataType: string
+		lineageTag: f8247291-7179-4948-9e96-b82191a46f4e
+		summarizeBy: none
+		sourceColumn: sitio_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column nombre
+		dataType: string
+		lineageTag: 28848981-aecc-4bba-b554-07c4650b2ae7
+		summarizeBy: none
+		sourceColumn: nombre
+
+		annotation SummarizationSetBy = Automatic
+
+	column ciudad
+		dataType: string
+		lineageTag: f4d04037-fa84-4040-bdeb-741385e85949
+		summarizeBy: none
+		sourceColumn: ciudad
+
+		annotation SummarizationSetBy = Automatic
+
+	column zona_horaria
+		dataType: string
+		lineageTag: bf331811-1419-45a2-bde0-84a40e2d5758
+		summarizeBy: none
+		sourceColumn: zona_horaria
+
+		annotation SummarizationSetBy = Automatic
+
+	partition dim_sitio = m
+		mode: import
+		source =
+				let
+				    Origen = PostgreSQL.Database("127.0.0.1:5433", "solarbi"),
+				    dwh_dim_sitio = Origen{[Schema="dwh",Item="dim_sitio"]}[Data]
+				in
+				    dwh_dim_sitio
+
+	annotation PBI_NavigationStepName = Navegación
+
+	annotation PBI_ResultType = Table
+

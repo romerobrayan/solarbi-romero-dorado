@@ -1,0 +1,73 @@
+table _Medidas
+	lineageTag: 873bfebf-5c43-5911-824f-77058d9c8f44
+
+	/// Energía de los días y dispositivos del contexto (suma de dwh.fact_energia_dia).
+	measure 'Energía total (kWh)' = SUM ( fact_energia_dia[energia_kwh] )
+		formatString: #,0.000
+		displayFolder: Energía
+		lineageTag: 07b11354-0e08-59fd-a296-2a3bc658e6a3
+
+	/// Misma base que la energía total; se usa en el gráfico de líneas por dim_fecha[fecha].
+	measure 'Energía diaria (kWh)' = [Energía total (kWh)]
+		formatString: #,0.000
+		displayFolder: Energía
+		lineageTag: 1798a0ee-7405-57a1-a555-f6e0978263d2
+
+	/// Lecturas válidas únicas / lecturas esperadas (cociente de sumas, no promedio de porcentajes diarios).
+	measure '% datos válidos' =
+			// Ratio of sums, never the average of the daily percentages: a day with few
+			// expected readings must not weigh as much as a full day. It matches
+			// dwh.fact_energia_dia.pct_datos_validos for a single day.
+			DIVIDE (
+			    SUM ( fact_energia_dia[lecturas_validas] ),
+			    SUM ( fact_energia_dia[lecturas_esperadas] )
+			)
+		formatString: 0.00%
+		displayFolder: Calidad
+		lineageTag: 1e7b34fb-5dbe-504f-b04d-7a6893e5f8a1
+
+	/// Filas día-dispositivo con pct_datos_validos >= 95 % (SLA del contrato de datos).
+	measure 'Días que cumplen SLA' = CALCULATE ( COUNTROWS ( fact_energia_dia ), fact_energia_dia[cumple_sla] = TRUE () )
+		formatString: #,0
+		displayFolder: Calidad
+		lineageTag: c20eff14-0a87-5794-9dfb-ebd36d4092aa
+
+	/// Mayor potencia AC de 5 minutos registrada en el contexto.
+	measure 'Potencia máxima (kW)' = MAX ( fact_energia_dia[p_max_kw] )
+		formatString: #,0.000
+		displayFolder: Energía
+		lineageTag: c2a56d10-196e-5fda-9cc0-9fc17f8f553f
+
+	/// Rendimiento específico: energía / potencia nominal instalada (dim_dispositivo).
+	measure 'Yield (kWh/kWp)' =
+			// Energy per installed kWp of the devices that produced in the context.
+			DIVIDE (
+			    [Energía total (kWh)],
+			    SUMX (
+			        SUMMARIZE (
+			            fact_energia_dia,
+			            dim_dispositivo[dispositivo_key],
+			            dim_dispositivo[nominal_kwp]
+			        ),
+			        dim_dispositivo[nominal_kwp]
+			    )
+			)
+		formatString: #,0.00
+		displayFolder: Energía
+		lineageTag: 9e03081b-a422-52b8-bedc-789317f3412f
+
+	column Columna
+		dataType: string
+		isHidden
+		lineageTag: 275013cb-fc1a-58a4-968e-3c4d36a0e671
+		summarizeBy: none
+		sourceColumn: Columna
+
+		annotation SummarizationSetBy = Automatic
+
+	partition _Medidas = m
+		mode: import
+		source = #table(type table [Columna = text], {})
+
+	annotation PBI_ResultType = Table
+
