@@ -18,7 +18,15 @@ COMMENT ON SCHEMA dq     IS 'Data-quality audit: ETL run log and rule results (e
 -- Read-only group role. Consumers (Grafana, Power BI) log in with their own
 -- roles that inherit from it (created in 01_roles.sh, which needs env vars).
 -- Bronze is deliberately excluded: consumers only see validated data.
-CREATE ROLE bi_readonly NOLOGIN;
+-- Roles are cluster-wide: the IF NOT EXISTS lets this file also bootstrap a second
+-- database in the same cluster (the integration tests do).
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'bi_readonly') THEN
+        CREATE ROLE bi_readonly NOLOGIN;
+    END IF;
+END
+$$;
 COMMENT ON ROLE bi_readonly IS 'Read-only access to silver, dwh and dq for BI consumers.';
 
 GRANT USAGE ON SCHEMA silver, dwh, dq TO bi_readonly;
