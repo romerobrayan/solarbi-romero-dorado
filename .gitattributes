@@ -11,6 +11,10 @@
 *.md    text eol=lf
 *.ps1   text eol=crlf
 
+# Data files are stored byte for byte: Bronze is immutable and the ETL identifies a
+# file by its SHA-256, which must be the same on every clone and in CI.
+*.csv   -text
+
 # Binary formats: never diff or normalize.
 *.pbix  binary
 *.abf   binary
