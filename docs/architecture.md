@@ -86,6 +86,7 @@ sumando energía (ver [ADR 0005](adr/0005-quality-rule-actions-reject-flag-dedup
 | Gold | `dwh.dim_fecha`, `dwh.dim_sitio`, `dwh.dim_dispositivo` | Dimensiones del modelo estrella | Sitios y dispositivos salen del contrato |
 | Calidad | `dq.etl_run_log`, `dq.rule_result` | Una fila por corrida y una por regla y corrida | Toda corrida queda registrada |
 | Calidad | `dq.fault_event` | Un evento por falla detectada | Reglas de falla del contrato, evaluadas sobre Silver |
+| Calidad | `dq.purga_log` | Una fila por purga de días | Qué se borró y qué filas de Bronze quedan reemplazadas (Bronze nunca se borra) |
 | Control | `meta.schema_migrations` | Una fila por migración aplicada | Migraciones solo hacia adelante |
 
 ## 4. Modelo de datos de `dwh`

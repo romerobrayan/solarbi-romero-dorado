@@ -63,3 +63,25 @@ Performance notes learned while building it:
   needs one SQL template; a new kind of check is a code change, a new rule of an existing kind is not.
 - Timestamp formats are limited to fixed-width strftime tokens (`%Y %m %d %H %M %S`); anything else
   is refused when the SQL is generated, with a clear message.
+
+## Update — Phase 3.1 (2026-10-08): purging days without touching Bronze
+
+The first fault sample was dated Oct 8–10, partly in the future, and had to leave Silver, Gold and
+`dq.fault_event` (the sample moved to Oct 2–4). `scripts/purge_days.py --from --to` removes whole
+local days from those three layers, as `etl_writer`, in one transaction under the ETL's advisory
+lock, and dry-runs unless `--apply` is given.
+
+Bronze cannot be deleted or updated (its trigger rejects both), and disabling the trigger would
+defeat the point of an immutable landing layer. So the purge **marks instead of deleting**: its row
+in `dq.purga_log` (days, UTC bounds, reason, who, when, rows removed per layer) means "Bronze rows
+whose 5-minute slot falls in `[ts_desde, ts_hasta)` and that were loaded before `ejecutada_en` are
+superseded". `stage_sql` leaves those rows out (a `vigente` CTE after the slot is computed), and the
+run report prints them as "Reemplazadas (purga)".
+
+- Re-running the old file (same SHA-256, so its Bronze rows are reused) cannot bring the days back;
+  verified in `docs/evidencias/fase-2-ejecucion.md`.
+- Anything loaded after the purge (a new file, `--force-reload`, the live replay writing today) is
+  current again: the mark is time-based, not per file.
+- The raw rows stay available for audit; the mark is data, readable by the BI roles, not a
+  convention.
+- Cost: `stage_sql` checks every row against `dq.purga_log` (a handful of rows; negligible).

@@ -12,6 +12,7 @@ rules and thresholds come from the contract.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from uuid import UUID
 
 from psycopg import sql
@@ -20,6 +21,7 @@ from etl.contract import DEVICE_COLUMN, Column, Contract, FaultRule, QualityRule
 
 BRONZE_TABLE = sql.Identifier("bronze", "telemetria_raw")
 SILVER_TABLE = sql.Identifier("silver", "lectura_5min")
+PURGES = sql.Identifier("dq", "purga_log")  # day purges; also mark older Bronze rows superseded
 
 # Temporary tables, dropped at commit.
 STAGE = sql.Identifier("etl_resultado")  # one row per Bronze row, with every rule outcome
@@ -31,6 +33,7 @@ POWER_COLUMN = "p_ac_kw"
 IRRADIANCE_COLUMN = "irradiancia_wm2"
 
 SLOT = sql.Identifier("ts_slot")
+LOADED_AT = sql.Identifier("bronze_loaded_at")
 NOMINAL = sql.Identifier("dev__nominal_kwp")
 REJECTED = sql.Identifier("rechazada")
 RANK = sql.Identifier("rn")
@@ -209,16 +212,40 @@ def rule_failure(contract: Contract, rule: QualityRule) -> sql.Composable:
     return sql.SQL("COALESCE({}, false)").format(_or(parts))
 
 
+def _slot_expression(contract: Contract, timestamp: sql.Composable) -> sql.Composed:
+    """The 5-minute slot of a timestamp: the nearest grid point, in the source's time zone."""
+    frequency = contract.frequency_seconds
+    return sql.SQL("date_bin({step}, {ts} + {half_step}, {origin})").format(
+        step=_step(frequency),
+        ts=timestamp,
+        half_step=_step(frequency / 2),
+        origin=sql.SQL("(TIMESTAMP '2000-01-01 00:00:00' AT TIME ZONE {})").format(
+            sql.Literal(contract.timezone.key)
+        ),
+    )
+
+
+def _not_superseded(slot: sql.Composable, loaded_at: sql.Composable) -> sql.Composed:
+    """The Bronze row is current: no later purge covers its slot (see dq.purga_log)."""
+    return sql.SQL(
+        """NOT EXISTS (
+        SELECT 1 FROM {purges} AS p
+        WHERE {slot} >= p.ts_desde AND {slot} < p.ts_hasta AND {loaded_at} < p.ejecutada_en
+    )"""
+    ).format(purges=PURGES, slot=slot, loaded_at=loaded_at)
+
+
 def stage_sql(contract: Contract, bronze_run_id: UUID) -> sql.Composed:
-    """Temp table with every Bronze row of a run, parsed, checked, ranked for dedupe.
+    """Temp table with every current Bronze row of a run, parsed, checked, ranked for dedupe.
 
     The CTEs are MATERIALIZED on purpose: inlined, every reference to a parsed
     column would re-run its parse expression (regexes, input validation) for
     each rule that reads it.
 
-    bronze_run_id is the run whose Bronze rows are transformed.
+    bronze_run_id is the run whose Bronze rows are transformed. Rows superseded by a
+    day purge (dq.purga_log) are left out, so re-running an old file cannot bring a
+    purged day back.
     """
-    frequency = contract.frequency_seconds
     grid_column = sql.Identifier(contract.grid.column)
     raw_select = sql.SQL(",\n           ").join(
         sql.SQL("{} AS {}").format(_raw_expression(contract, c), raw_column(c.name))
@@ -245,7 +272,7 @@ def stage_sql(contract: Contract, bronze_run_id: UUID) -> sql.Composed:
     return sql.SQL(
         """CREATE TEMP TABLE {stage} ON COMMIT DROP AS
 WITH raw AS (
-    SELECT b.source_row,
+    SELECT b.source_row, b.loaded_at AS {loaded_at},
            {raw_select}
     FROM {bronze} AS b
     WHERE b.run_id = {bronze_run_id}
@@ -256,14 +283,18 @@ WITH raw AS (
 ), keyed AS MATERIALIZED (
     SELECT parsed.*,
            dev.nominal_kwp AS {nominal},
-           date_bin({step}, parsed.{grid_column} + {half_step}, {origin}) AS {slot}
+           {slot_expression} AS {slot}
     FROM parsed
     LEFT JOIN (VALUES {devices}) AS dev (device_id, nominal_kwp)
            ON dev.device_id = parsed.{device}
-), checked AS MATERIALIZED (
-    SELECT keyed.*,
-           {checks}
+), vigente AS (
+    SELECT keyed.*
     FROM keyed
+    WHERE {not_superseded}
+), checked AS MATERIALIZED (
+    SELECT vigente.*,
+           {checks}
+    FROM vigente
 ), decided AS (
     SELECT checked.*, ({rejected}) AS {rejected_column}
     FROM checked
@@ -274,16 +305,15 @@ SELECT decided.*,
 FROM decided"""
     ).format(
         stage=STAGE,
+        loaded_at=LOADED_AT,
         raw_select=raw_select,
         bronze=BRONZE_TABLE,
         bronze_run_id=sql.Literal(bronze_run_id),
         parsed_select=parsed_select,
         nominal=NOMINAL,
-        step=_step(frequency),
-        grid_column=grid_column,
-        half_step=_step(frequency / 2),
-        origin=sql.SQL("(TIMESTAMP '2000-01-01 00:00:00' AT TIME ZONE {})").format(
-            sql.Literal(contract.timezone.key)
+        slot_expression=_slot_expression(contract, sql.SQL("parsed.{}").format(grid_column)),
+        not_superseded=_not_superseded(
+            sql.SQL("keyed.{}").format(SLOT), sql.SQL("keyed.{}").format(LOADED_AT)
         ),
         slot=SLOT,
         devices=devices,
@@ -666,3 +696,45 @@ WHERE f.dispositivo_id = dd.dispositivo_id
   )"""
         ).format(days=DAYS, rule_ids=rule_ids, faults=FAULTS),
     ]
+
+
+# --- day purge (scripts/purge_days.py) -------------------------------------------------------
+
+
+def superseded_bronze_sql(
+    contract: Contract, ts_desde: datetime, ts_hasta: datetime
+) -> sql.Composed:
+    """Count the current Bronze rows whose slot falls in [ts_desde, ts_hasta): the rows that a
+    purge of those days supersedes (Bronze is append-only, so they are marked, not deleted)."""
+    column = contract.column(contract.grid.column)
+    return sql.SQL(
+        """WITH raw AS (
+    SELECT b.loaded_at, {raw} AS {raw_name}
+    FROM {bronze} AS b
+), parsed AS MATERIALIZED (
+    SELECT raw.loaded_at, {parse} AS {name}
+    FROM raw
+), keyed AS (
+    SELECT {slot_expression} AS {slot}, parsed.loaded_at AS {loaded_at}
+    FROM parsed
+)
+SELECT count(*) FROM keyed
+WHERE keyed.{slot} >= {ts_desde} AND keyed.{slot} < {ts_hasta}
+  AND {not_superseded}"""
+    ).format(
+        raw=_raw_expression(contract, column),
+        raw_name=raw_column(column.name),
+        bronze=BRONZE_TABLE,
+        parse=_parse_expression(contract, column),
+        name=sql.Identifier(column.name),
+        slot_expression=_slot_expression(
+            contract, sql.SQL("parsed.{}").format(sql.Identifier(column.name))
+        ),
+        slot=SLOT,
+        loaded_at=LOADED_AT,
+        ts_desde=sql.Literal(ts_desde),
+        ts_hasta=sql.Literal(ts_hasta),
+        not_superseded=_not_superseded(
+            sql.SQL("keyed.{}").format(SLOT), sql.SQL("keyed.{}").format(LOADED_AT)
+        ),
+    )

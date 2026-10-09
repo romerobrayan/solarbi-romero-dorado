@@ -56,3 +56,13 @@ def test_default_output_never_overwrites_bronze(tmp_path: Path, monkeypatch) -> 
     assert main(["--seed", "5", "--days", "1"]) == 0
     assert (tmp_path / "data" / "samples" / "telemetria_fallas_seed5.csv").is_file()
     assert not (tmp_path / "data" / "bronze").exists()
+
+
+def test_committed_fault_sample_is_the_default_output_and_in_the_past(tmp_path: Path) -> None:
+    """data/samples is reproducible, and dated before the professor's file (no future data)."""
+    committed = PROJECT_ROOT / "data" / "samples" / "telemetria_fallas_seed42.csv"
+    out = tmp_path / "sample.csv"
+    assert main(["--seed", "42", "--inject-faults", "--out", str(out)]) == 0
+    assert out.read_bytes() == committed.read_bytes()
+    timestamps = [row[0] for row in _read(committed)[1:]]
+    assert (min(timestamps), max(timestamps)) == ("2026-10-02 00:00:00", "2026-10-04 23:55:00")

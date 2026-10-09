@@ -94,6 +94,23 @@ Qué revisa el operador cuando llega:
 Para practicar sin un inversor real, `python scripts/replay_live.py` simula un disparo en vivo
 (ver README); debe ejecutarse entre las 09:00 y las 15:00.
 
+## Purgar días cargados por error
+
+Si se cargaron datos que no debían estar (por ejemplo, una muestra simulada con fechas futuras),
+`scripts/purge_days.py` borra días locales completos de Silver, Gold y los eventos de falla, como
+`etl_writer` y en una sola transacción. Sin `--apply` solo muestra lo que borraría:
+
+```powershell
+python scripts/purge_days.py --from 2026-10-08 --to 2026-10-10 --motivo "Muestra con fechas futuras"
+python scripts/purge_days.py --from 2026-10-08 --to 2026-10-10 --motivo "Muestra con fechas futuras" --apply
+```
+
+Bronze **no** se borra (es de solo inserción). La purga queda en `dq.purga_log`, con lo que
+borró, y esa fila marca como reemplazadas las filas de Bronze de esos días cargadas antes de la
+purga: el ETL ya no las transforma (aparecen como "Reemplazadas (purga)" en el reporte). Así, volver
+a ejecutar un archivo viejo no trae de vuelta los días purgados. Una carga posterior a la purga (un
+archivo nuevo, `--force-reload` o la réplica en vivo) sí cuenta.
+
 ## Diagnóstico
 
 ```sql

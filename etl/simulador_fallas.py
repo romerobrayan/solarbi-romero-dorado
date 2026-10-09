@@ -42,7 +42,7 @@ class SimulationConfig:
     seed: int = 42
     days: int = 3
     devices: int = 1
-    start: date = date(2026, 10, 8)
+    start: date = date(2026, 10, 2)
     inject_faults: bool = False
 
 
@@ -114,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         "--start",
         type=date.fromisoformat,
         default=SimulationConfig.start,
-        help="first day, YYYY-MM-DD (default 2026-10-08, right after the professor's file)",
+        help="first day, YYYY-MM-DD (default 2026-10-02: the 3 days before the professor's file)",
     )
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--inject-faults", action="store_true")

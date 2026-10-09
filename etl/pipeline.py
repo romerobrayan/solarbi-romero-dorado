@@ -55,6 +55,7 @@ class RunReport:
     bronze_status: str = ""
     bronze_run_id: uuid.UUID | None = None
     bronze_rows_loaded: int = 0
+    filas_reemplazadas: int = 0  # Bronze rows of the run superseded by a day purge
     filas_leidas: int = 0
     filas_rechazadas: int = 0
     filas_deduplicadas: int = 0
@@ -157,6 +158,11 @@ def _load(
         report.filas_validas = values["validas"]
         report.filas_marcadas = values["marcadas"]
         report.rule_counts = {r.id: values[f"rule__{r.id}"] for r in contract.quality_rules}
+        bronze_rows = conn.execute(
+            sql.SQL("SELECT count(*) FROM {} WHERE run_id = %s").format(sqlgen.BRONZE_TABLE),
+            (report.bronze_run_id,),
+        ).fetchone()[0]
+        report.filas_reemplazadas = bronze_rows - report.filas_leidas
         with conn.cursor() as cur:
             cur.executemany(
                 """INSERT INTO dq.rule_result (run_id, rule_id, action, filas_afectadas)

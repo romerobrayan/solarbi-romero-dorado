@@ -20,6 +20,7 @@ from etl.config import Settings
 from etl.contract import ContractError
 from etl.pipeline import EtlRunError, RunReport, run_etl
 from etl.simulador_fallas import SimulationConfig, generate_rows, write_csv
+from scripts.purge_days import purge_days
 
 FIXTURES = Path(__file__).parent / "fixtures"
 ANOMALIES = FIXTURES / "telemetria_anomalias.csv"
@@ -275,6 +276,56 @@ def test_force_reload_appends_bronze_but_keeps_silver_and_gold(
     assert {t: after[t] for t in TABLES[1:]} == {t: before[t] for t in TABLES[1:]}
 
 
+# --- day purge ----------------------------------------------------------------
+
+
+def test_purge_removes_days_and_supersedes_their_bronze_rows(
+    test_settings: Settings, tmp_path: Path
+) -> None:
+    path = _simulated(tmp_path, date(2030, 7, 1), seed=17, faults=True)  # Jul 1-2, trip on Jul 2
+    first = _run(test_settings, path)
+    before = _counts(test_settings)
+    day2 = ("2030-07-02 05:00+00", "2030-07-03 05:00+00")  # local day Jul 2 in UTC
+    silver_day2 = _silver_rows(test_settings, *day2)
+    faults_day2 = _fault_events(test_settings, *day2)
+    assert silver_day2 > 0 and faults_day2 >= 1  # at least the inverter trip
+    assert _energy(test_settings, "2030-07-02", "2030-07-02")
+
+    dry = purge_days(test_settings, date(2030, 7, 2), date(2030, 7, 2), "prueba", apply=False)
+    assert (dry.filas_silver, dry.filas_gold, dry.eventos_falla) == (silver_day2, 1, faults_day2)
+    assert _counts(test_settings) == before  # a dry run rolls back
+    assert _purges(test_settings, dry.purga_id) == 0
+
+    done = purge_days(test_settings, date(2030, 7, 2), date(2030, 7, 2), "prueba", apply=True)
+
+    after = _counts(test_settings)
+    assert after["bronze.telemetria_raw"] == before["bronze.telemetria_raw"]  # append-only
+    assert after["silver.lectura_5min"] == before["silver.lectura_5min"] - silver_day2
+    assert after["dq.fault_event"] == before["dq.fault_event"] - faults_day2
+    assert _energy(test_settings, "2030-07-01", "2030-07-02") == _energy(
+        test_settings, "2030-07-01", "2030-07-01"
+    )
+    assert done.filas_bronze_reemplazadas == dry.filas_bronze_reemplazadas >= silver_day2
+    assert _purges(test_settings, done.purga_id) == 1
+
+    # Re-running the same file reuses its Bronze rows, but the superseded day stays purged.
+    again = _run(test_settings, path)
+    assert again.bronze_status == "skipped_duplicate_file"
+    assert again.filas_reemplazadas == done.filas_bronze_reemplazadas
+    assert again.filas_leidas == first.filas_leidas - done.filas_bronze_reemplazadas
+    assert _silver_rows(test_settings, *day2) == 0
+    assert _counts(test_settings) == after
+
+    # A deliberate reload lands new Bronze rows after the purge: the day is current again.
+    _run(test_settings, path, force_reload=True)
+    assert _silver_rows(test_settings, *day2) == silver_day2
+
+
+def test_purge_refuses_an_inverted_range(test_settings: Settings) -> None:
+    with pytest.raises(ValueError, match="before"):
+        purge_days(test_settings, date(2030, 7, 5), date(2030, 7, 4), "prueba")
+
+
 # --- failures ----------------------------------------------------------------
 
 
@@ -354,6 +405,28 @@ def _energy(settings: Settings, first_day: str, last_day: str) -> list[tuple[int
                ORDER BY fecha_key""",
             (first_day, last_day),
         ).fetchall()
+
+
+def _silver_rows(settings: Settings, ts_from: str, ts_to: str) -> int:
+    with psycopg.connect(settings.db.url) as conn:
+        return conn.execute(
+            "SELECT count(*) FROM silver.lectura_5min WHERE ts >= %s AND ts < %s", (ts_from, ts_to)
+        ).fetchone()[0]
+
+
+def _fault_events(settings: Settings, ts_from: str, ts_to: str) -> int:
+    with psycopg.connect(settings.db.url) as conn:
+        return conn.execute(
+            "SELECT count(*) FROM dq.fault_event WHERE ts_inicio >= %s AND ts_inicio < %s",
+            (ts_from, ts_to),
+        ).fetchone()[0]
+
+
+def _purges(settings: Settings, purga_id: object) -> int:
+    with psycopg.connect(settings.db.url) as conn:
+        return conn.execute(
+            "SELECT count(*) FROM dq.purga_log WHERE purga_id = %s", (purga_id,)
+        ).fetchone()[0]
 
 
 def _run_count(settings: Settings) -> int:

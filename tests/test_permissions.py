@@ -102,6 +102,7 @@ def test_grafana_reader_reads_every_migrated_consumer_table(
         "dq.etl_run_log",
         "dq.rule_result",
         "dq.fault_event",
+        "dq.purga_log",
     ]
     with _connect(grafana_reader) as conn:
         for table in tables:

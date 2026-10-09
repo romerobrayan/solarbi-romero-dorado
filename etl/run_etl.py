@@ -43,6 +43,13 @@ def format_report(report: RunReport) -> str:
         f"Corrida                 : {report.run_id}",
         f"Archivo                 : {report.source.label} (contrato v{contract.version})",
         f"Bronze                  : {bronze}",
+    ]
+    if report.filas_reemplazadas:
+        lines.append(
+            f"Reemplazadas (purga)    : {report.filas_reemplazadas} filas de Bronze en días "
+            "purgados (dq.purga_log): no se transforman"
+        )
+    lines += [
         f"Filas leídas            : {report.filas_leidas}",
         f"Rechazadas por regla    : {listing('reject')}",
         f"Rechazadas (distintas)  : {report.filas_rechazadas}",
