@@ -4,7 +4,7 @@
 **Curso:** Inteligencia de Negocios — Grupo 01 — Institución Universitaria Pascual Bravo, semestre 2026-II
 **Docente:** Ramiro Grisales Montoya
 
-> Trabajo **individual**: la regla de parejas del curso no aplica a este proyecto.
+> Trabajo **individual**, autorizado por el docente.
 
 ## Descripción
 
@@ -19,7 +19,6 @@ de filas con un esquema aún desconocido, por eso nada en el repositorio depende
 ni de datos pequeños.
 
 > "One governed dataset, two views: Grafana for real-time operations and Power BI for business decisions."
-> — Ramiro Grisales Montoya
 
 El diagrama del flujo está en [docs/architecture.md](docs/architecture.md) y las decisiones de
 arquitectura en [docs/adr/](docs/adr/).
@@ -267,7 +266,6 @@ instalado en el equipo. Si el puerto 5433 o 3000 ya está ocupado, basta con cam
 | Ruta | Contenido |
 |---|---|
 | `README.md` | Este documento |
-| `CLAUDE.md` | Contexto y reglas para sesiones de trabajo con asistente de IA |
 | `.env.example` | Plantilla de variables de entorno (sin secretos reales) |
 | `docker-compose.yml` | PostgreSQL 16 + TimescaleDB y Grafana OSS |
 | `pyproject.toml` | Proyecto Python, dependencias fijadas, configuración de pytest y ruff |
@@ -275,7 +273,7 @@ instalado en el equipo. Si el puerto 5433 o 3000 ya está ocupado, basta con cam
 | `data/bronze/` | CSV crudo e inmutable (solo se versiona la salida pequeña del simulador) |
 | `data/silver/` | Exportaciones limpias (solo archivos pequeños) |
 | `data/samples/` | Muestras pequeñas versionadas (`telemetria_fallas_seed42.csv`) |
-| `docs/` | Enunciado (PDF), arquitectura, ADRs, operación (`operacion.md`) y evidencias (`evidencias/`) |
+| `docs/` | PDF de la consulta (`BrayanRomeroDorado_Consulta_BI_G01.pdf`), arquitectura, ADRs, operación (`operacion.md`) y evidencias (`evidencias/`) |
 | `etl/` | `run_etl.py` (punto de entrada), `pipeline.py`, `bronze.py`, `sqlgen.py` (SQL generado desde el contrato), `contract.py`, `migrations.py`, `config.py`, `simulador.py` (del docente) y `simulador_fallas.py` |
 | `scripts/` | `migrate.py`, `check_env.py`, `conteos.py`, `purge_days.py` (purga de días); `replay_live.py` (alertas en vivo), `export_grafana.py` (tablero a JSON), `powerbi_model.py` (medidas DAX en TMDL) |
 | `sql/init/` | Arranque de la base de datos: extensión, esquemas y roles de lectura |
@@ -293,9 +291,9 @@ instalado en el equipo. Si el puerto 5433 o 3000 ya está ocupado, basta con cam
 | 0 | Fundamentos: repositorio, infraestructura local y convenciones | ✅ Completada |
 | 1 | Arquitectura y contrato de datos | ✅ Completada |
 | 2 | ETL (Bronze → Silver → Gold) con reglas de calidad | ✅ Completada |
-| 3 | Dashboards (Grafana y Power BI) | ✅ Grafana completo; Power BI pendiente de los pasos en Desktop |
-| 4 | Investigación (Parte A, fuera del repositorio) | ⏳ En curso |
-| 5 | Entrega | Pendiente |
+| 3 | Dashboards (Grafana y Power BI) | ✅ Completada |
+| 4 | Investigación (Parte A, fuera del repositorio) | ✅ Completada |
+| 5 | Entrega | ✅ Primera versión (PDF en `docs/`) |
 | 6 | Escalamiento al dataset real (4M+ filas) | Pendiente |
 | 7 | Dashboard final y modelo estrella | Pendiente |
 
